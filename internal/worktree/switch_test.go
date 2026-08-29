@@ -42,6 +42,24 @@ func TestSwitchToDefaultNamedTrunk(t *testing.T) {
 	}
 }
 
+func TestSwitchToDefaultWithATagNamedAfterTheRemoteBranch(t *testing.T) {
+	clone, _ := testutil.NewClonedRepo(t)
+	testutil.Git(t, clone, "switch", "--quiet", "--create", "work")
+	// The local branch has to be gone for the start point to be reached at all.
+	testutil.Git(t, clone, "branch", "--delete", "--force", "main")
+	// A tag of that name makes the short form ambiguous, and git declines to
+	// resolve it rather than guessing which one was meant.
+	testutil.Git(t, clone, "tag", "origin/main")
+
+	if err := SwitchToDefault(open(t, clone), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	if branch := testutil.Git(t, clone, "rev-parse", "--abbrev-ref", "HEAD"); branch != "main" {
+		t.Fatalf("the checkout is on %q, want main", branch)
+	}
+}
+
 func TestSwitchToDefaultInWorktree(t *testing.T) {
 	clone, _ := testutil.NewClonedRepo(t)
 	feature := testutil.AddWorktree(t, clone, "feature")
@@ -75,7 +93,7 @@ func TestSwitchToDefaultNoOrigin(t *testing.T) {
 func TestSwitchToDefaultOffline(t *testing.T) {
 	clone, origin := testutil.NewClonedRepo(t)
 	testutil.Git(t, clone, "switch", "--quiet", "--create", "feature")
-	// Removing the origin is the only proof holt did not reach for it.
+	// With the origin gone, a fetch has nowhere to go.
 	if err := os.RemoveAll(origin); err != nil {
 		t.Fatal(err)
 	}
@@ -182,11 +200,49 @@ func TestSwitchToDefaultCarriesWork(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if branch := testutil.Git(t, clone, "rev-parse", "--abbrev-ref", "HEAD"); branch != "main" {
+		t.Fatalf("the checkout is on %q, so there was no switch for the edit to survive", branch)
+	}
 	content, err := os.ReadFile(filepath.Join(clone, "scratch.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(content) != "half-written\n" {
 		t.Errorf("the edit did not survive the switch, the file holds %q", content)
+	}
+}
+
+func TestSwitchToDefaultInBareRepository(t *testing.T) {
+	bare := testutil.NewBareRepo(t)
+
+	err := SwitchToDefault(open(t, bare), io.Discard)
+
+	if err == nil {
+		t.Fatal("a bare repository has no checkout to switch")
+	}
+	// git only says the operation must run in a work tree, naming a command
+	// the user never typed.
+	if !strings.Contains(err.Error(), "bare repository") {
+		t.Errorf("error %q is git's rather than holt's", err)
+	}
+}
+
+func TestSwitchToDefaultFromWorktreeOfBareRepository(t *testing.T) {
+	bare := testutil.NewBareRepo(t)
+	linked := filepath.Join(filepath.Dir(bare), "feature")
+	testutil.Git(t, bare, "worktree", "add", "--quiet", "-b", "feature", linked)
+
+	err := SwitchToDefault(open(t, linked), io.Discard)
+
+	if err == nil {
+		t.Fatal("a bare repository has no checkout to switch to")
+	}
+	// Sending the user to the main checkout would land them somewhere holt
+	// then refuses, for a different reason.
+	if strings.Contains(err.Error(), "holt home") {
+		t.Errorf("error %q sends the user to a bare repository", err)
+	}
+	if !strings.Contains(err.Error(), "bare repository") {
+		t.Errorf("error %q does not say what is actually in the way", err)
 	}
 }

@@ -106,6 +106,24 @@ func TestSnippetSilentWithoutHolt(t *testing.T) {
 	})
 }
 
+func TestSnippetSurvivesSetU(t *testing.T) {
+	forEachInstalledShell(t, func(t *testing.T, name, rc string) {
+		// A bare "holt" reads as an argument the function was not given, and under
+		// set -u "$1" aborts the shell instead of printing holt's help.
+		command := exec.Command(name, "-c", "set -u; source "+rc+"; holt; echo done")
+		command.Env = []string{"PATH=", "HOME=" + filepath.Dir(rc)}
+
+		out, err := command.CombinedOutput()
+
+		if err != nil {
+			t.Fatalf("the bare command failed under set -u: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "done") {
+			t.Fatalf("the shell stopped at the unset argument:\n%s", out)
+		}
+	})
+}
+
 func forEachInstalledShell(t *testing.T, run func(t *testing.T, name, rc string)) {
 	t.Helper()
 	for _, name := range Supported {
@@ -197,5 +215,16 @@ func write(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestQuoteAndNamedSurviveAnEmbeddedQuote(t *testing.T) {
+	// A refname may hold a quote: git refuses a space but takes this.
+	command := Named("git branch --set-upstream-to=" + Quote("origin/we&ird'q"))
+
+	// Through %q the backslash is escaped again and the line stops being one
+	// command, which is what these two exist to avoid.
+	if want := `"git branch --set-upstream-to='origin/we&ird'\''q'"`; command != want {
+		t.Fatalf("got %s, want %s", command, want)
 	}
 }

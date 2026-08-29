@@ -13,7 +13,7 @@ func TestWriteExcludesHidesSymlinks(t *testing.T) {
 	main := testutil.NewRepo(t)
 	testutil.WriteFile(t, filepath.Join(main, ".claude", "skills", "cdc-local", "SKILL.md"), "skill\n")
 	worktreePath := testutil.AddWorktree(t, main, "feature")
-	repo := openRepo(t, main)
+	repo := open(t, main)
 
 	if err := WriteExcludes(repo, []string{".claude/skills/*-local"}); err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestWriteExcludesKeepsLines(t *testing.T) {
 	main := testutil.NewRepo(t)
 	exclude := filepath.Join(main, ".git", "info", "exclude")
 	testutil.WriteFile(t, exclude, "# written by hand\nscratch.txt\n")
-	repo := openRepo(t, main)
+	repo := open(t, main)
 
 	if err := WriteExcludes(repo, []string{"CLAUDE.local.md"}); err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestWriteExcludesRewritesBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := openRepo(t, main)
+	repo := open(t, main)
 
 	if err := WriteExcludes(repo, []string{"CLAUDE.local.md"}); err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestWriteExcludesDropsBlock(t *testing.T) {
 	main := testutil.NewRepo(t)
 	exclude := filepath.Join(main, ".git", "info", "exclude")
 	testutil.WriteFile(t, exclude, "scratch.txt\n")
-	repo := openRepo(t, main)
+	repo := open(t, main)
 
 	if err := WriteExcludes(repo, []string{"CLAUDE.local.md"}); err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestWriteExcludesDropsBlock(t *testing.T) {
 
 func TestWriteExcludesAnchored(t *testing.T) {
 	main := testutil.NewRepo(t)
-	repo := openRepo(t, main)
+	repo := open(t, main)
 	if err := WriteExcludes(repo, []string{"CLAUDE.local.md"}); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestWriteExcludesNoEndMarker(t *testing.T) {
 	exclude := filepath.Join(main, ".git", "info", "exclude")
 	testutil.WriteFile(t, exclude, excludeBegin+"\n/CLAUDE.local.md\nkept-by-hand.txt\n")
 
-	if err := WriteExcludes(openRepo(t, main), []string{".claude/settings.local.json"}); err != nil {
+	if err := WriteExcludes(open(t, main), []string{".claude/settings.local.json"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -136,25 +136,35 @@ func TestWriteExcludesNoEndMarker(t *testing.T) {
 	}
 }
 
-func TestHasExcludeBlock(t *testing.T) {
-	repo := openRepo(t, testutil.NewRepo(t))
+func TestExcludesMatch(t *testing.T) {
+	repo := open(t, testutil.NewRepo(t))
+	paths := []string{"CLAUDE.local.md"}
 
-	before, err := HasExcludeBlock(repo)
+	beforePresent, _, err := ExcludesMatch(repo, paths)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteExcludes(repo, []string{"CLAUDE.local.md"}); err != nil {
+	if err := WriteExcludes(repo, paths); err != nil {
 		t.Fatal(err)
 	}
-	after, err := HasExcludeBlock(repo)
+	present, matching, err := ExcludesMatch(repo, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A hand-edited list, or two holt commands writing at once: the marker says only
+	// that a block is there, while a stale one leaves the symlinks untracked.
+	_, behind, err := ExcludesMatch(repo, append(paths, ".envrc"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if before {
+	if beforePresent {
 		t.Error("an untouched repository reported holt's block as present")
 	}
-	if !after {
-		t.Error("the block was not found after being written")
+	if !present || !matching {
+		t.Errorf("got (%v, %v) after writing the block, want it present and matching", present, matching)
+	}
+	if behind {
+		t.Error("a block covering fewer paths than the list was reported as matching")
 	}
 }

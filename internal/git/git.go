@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -37,6 +39,11 @@ func Open(dir string) (*Repo, error) {
 	// compare unequal to every path git hands back.
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// Reached the ordinary way: another shell removes the worktree this
+			// one is standing in. Go's own wording names a call nobody made.
+			return nil, fmt.Errorf("%s: %w", dir, fs.ErrNotExist)
+		}
 		return nil, fmt.Errorf("resolving %s: %w", dir, err)
 	}
 
@@ -56,12 +63,44 @@ func (r *Repo) At(dir string) *Repo {
 	return &Repo{dir: dir}
 }
 
+// git exports these to hooks, "!" aliases and "rebase --exec" scripts; inherited,
+// they outrank the -C below and aim holt at another repository.
+var redirectingVars = []string{
+	"GIT_DIR",
+	"GIT_WORK_TREE",
+	"GIT_COMMON_DIR",
+	"GIT_INDEX_FILE",
+	"GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	"GIT_NAMESPACE",
+}
+
 func (r *Repo) command(args []string) *exec.Cmd {
 	cmd := exec.Command("git", append([]string{"-C", r.dir}, args...)...)
 	// holt matches on git's messages, which git translates unless LC_ALL is C.
 	// The last value of a duplicated key wins.
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	cmd.Env = append(EnvWithoutRedirects(), "LC_ALL=C")
 	return cmd
+}
+
+// RedirectingVars names the variables pointing git at another repository, exported
+// for tests, which have to leave them behind the same way.
+func RedirectingVars() []string {
+	return slices.Clone(redirectingVars)
+}
+
+// EnvWithoutRedirects is the caller's environment with the variables that
+// redirect git removed, for a tool holt runs that talks to the same repository.
+func EnvWithoutRedirects() []string {
+	environment := os.Environ()
+	kept := environment[:0]
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if !slices.Contains(redirectingVars, name) {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
 }
 
 // A nil stderr means git wrote straight to the user, leaving nothing to quote.
@@ -113,20 +152,17 @@ func (r *Repo) Passthrough(stdout, stderr io.Writer, args ...string) error {
 
 // GitDir is per-worktree, and holds the markers a rebase or merge leaves.
 func (r *Repo) GitDir() (string, error) {
-	out, err := r.Output("rev-parse", "--git-dir")
-	if err != nil {
-		return "", err
-	}
-	if filepath.IsAbs(out) {
-		return filepath.Clean(out), nil
-	}
-	return filepath.Join(r.dir, out), nil
+	return r.revParseDir("--git-dir")
 }
 
 // CommonDir is shared by every worktree. git reports it relative in the main
 // checkout and absolute in a linked one.
 func (r *Repo) CommonDir() (string, error) {
-	out, err := r.Output("rev-parse", "--git-common-dir")
+	return r.revParseDir("--git-common-dir")
+}
+
+func (r *Repo) revParseDir(flag string) (string, error) {
+	out, err := r.Output("rev-parse", flag)
 	if err != nil {
 		return "", err
 	}
@@ -143,6 +179,15 @@ func (r *Repo) Toplevel() (string, error) {
 // The boolean reports whether the key is set.
 func (r *Repo) Config(key string) (string, bool, error) {
 	return r.config(key)
+}
+
+// ConfigBool leaves the parsing to git, which reads 1, yes and on as true.
+func (r *Repo) ConfigBool(key string) (bool, error) {
+	value, set, err := r.config("--type=bool", key)
+	if err != nil || !set {
+		return false, err
+	}
+	return value == "true", nil
 }
 
 // ConfigPath expands a leading ~ as git does; without it a hooksPath of

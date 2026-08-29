@@ -13,7 +13,7 @@ import (
 func TestHookDirDefault(t *testing.T) {
 	main := testutil.NewRepo(t)
 
-	dir, insideWorkTree, err := HookDir(openRepo(t, main))
+	dir, insideWorkTree, err := HookDir(open(t, main))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,11 +28,12 @@ func TestHookDirDefault(t *testing.T) {
 
 func TestHookDirAbsolutePath(t *testing.T) {
 	main := testutil.NewRepo(t)
-	// The shape a hook manager leaves: the default location, spelled out.
-	configured := filepath.Join(main, ".git", "hooks")
+	// The shape a hook manager leaves, spelled out: the default location would not
+	// tell the setting being read from it being ignored.
+	configured := filepath.Join(main, ".git", "custom-hooks")
 	testutil.Git(t, main, "config", "core.hooksPath", configured)
 
-	dir, insideWorkTree, err := HookDir(openRepo(t, main))
+	dir, insideWorkTree, err := HookDir(open(t, main))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestHookDirTildePath(t *testing.T) {
 	// Read literally, ~ is joined onto the working tree and the hook lands nowhere.
 	testutil.Git(t, main, "config", "core.hooksPath", "~/hooks")
 
-	dir, _, err := HookDir(openRepo(t, main))
+	dir, _, err := HookDir(open(t, main))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestHookDirRelativePath(t *testing.T) {
 	main := testutil.NewRepo(t)
 	testutil.Git(t, main, "config", "core.hooksPath", ".husky")
 
-	dir, insideWorkTree, err := HookDir(openRepo(t, main))
+	dir, insideWorkTree, err := HookDir(open(t, main))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +89,7 @@ func TestHookDirOutsideRepository(t *testing.T) {
 	elsewhere := t.TempDir()
 	testutil.Git(t, main, "config", "core.hooksPath", elsewhere)
 
-	_, insideWorkTree, err := HookDir(openRepo(t, main))
+	_, insideWorkTree, err := HookDir(open(t, main))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestHookDirDoubleDotName(t *testing.T) {
 	// An ordinary directory name, not a step out of the project.
 	testutil.Git(t, main, "config", "core.hooksPath", "..hooks")
 
-	_, insideWorkTree, err := HookDir(openRepo(t, main))
+	_, insideWorkTree, err := HookDir(open(t, main))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestHookDirSymlinkIntoProject(t *testing.T) {
 	}
 	testutil.Git(t, main, "config", "core.hooksPath", disguise)
 
-	_, insideWorkTree, err := HookDir(openRepo(t, main))
+	_, insideWorkTree, err := HookDir(open(t, main))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,10 +135,76 @@ func TestHookDirSymlinkIntoProject(t *testing.T) {
 	}
 }
 
+func TestHookDirInsideTheMainCheckoutSeenFromAWorktree(t *testing.T) {
+	main := testutil.NewRepo(t)
+	linked := testutil.AddWorktree(t, main, "feature")
+	testutil.Git(t, main, "config", "core.hooksPath", filepath.Join(main, ".githooks"))
+
+	_, insideWorkTree, err := HookDir(open(t, linked))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Judged against the worktree holt stands in, this comes out false, and the refusal
+	// that keeps an untracked file out of the project is waived by standing elsewhere.
+	if !insideWorkTree {
+		t.Error("a hooks directory inside the main checkout was cleared from a linked worktree")
+	}
+}
+
+func TestHookDirRelativePathIsTheMainCheckouts(t *testing.T) {
+	main := testutil.NewRepo(t)
+	linked := testutil.AddWorktree(t, main, "feature")
+	testutil.Git(t, main, "config", "core.hooksPath", filepath.Join("..", "shared-hooks"))
+
+	dir, _, err := HookDir(open(t, linked))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// git resolves it against the working tree of the moment, so holt would install
+	// the hook in one place, look for it in another, and doctor disagree with itself.
+	if want := filepath.Join(filepath.Dir(main), "shared-hooks"); dir != want {
+		t.Fatalf("got %q, want %q", dir, want)
+	}
+}
+
+func TestInstallHookRefusedInABareRepository(t *testing.T) {
+	bare := testutil.NewBareRepo(t)
+	worktree := filepath.Join(filepath.Dir(bare), "checkout")
+	testutil.Git(t, bare, "worktree", "add", "--quiet", worktree, "-b", "feature")
+
+	_, err := InstallHook(open(t, bare), HookOptions{})
+
+	// The hook runs "holt mirror sync", which has nothing to mirror from here, so
+	// installed it only talks on every checkout.
+	if !errors.Is(err, ErrBareRepository) {
+		t.Fatalf("got %v, want the bare repository refused", err)
+	}
+}
+
+func TestHookDirInsideTheWorktreeOfABareRepository(t *testing.T) {
+	bare := testutil.NewBareRepo(t)
+	worktree := filepath.Join(filepath.Dir(bare), "checkout")
+	testutil.Git(t, bare, "worktree", "add", "--quiet", worktree, "-b", "feature")
+	testutil.Git(t, bare, "config", "core.hooksPath", filepath.Join(worktree, "hooks"))
+
+	_, insideWorkTree, err := HookDir(open(t, bare))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A bare repository has worktrees of its own, and a hook written into one
+	// shows up there as an untracked file, which is what the refusal is for.
+	if !insideWorkTree {
+		t.Error("a hooks directory inside a worktree of a bare repository was cleared")
+	}
+}
+
 func TestHookDirBareRepository(t *testing.T) {
 	bare := testutil.NewBareRepo(t)
 
-	dir, insideWorkTree, err := HookDir(openRepo(t, bare))
+	dir, insideWorkTree, err := HookDir(open(t, bare))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +221,7 @@ func TestHookDirFromWorktree(t *testing.T) {
 	main := testutil.NewRepo(t)
 	linked := testutil.AddWorktree(t, main, "feature")
 
-	dir, _, err := HookDir(openRepo(t, linked))
+	dir, _, err := HookDir(open(t, linked))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +236,7 @@ func TestInspectHookMentionsMarker(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(main, ".git", "hooks", "post-checkout"),
 		"#!/bin/sh\n# this is not the hook # installed by holt\necho someone else\n")
 
-	_, state, err := InspectHook(openRepo(t, main))
+	_, state, err := InspectHook(open(t, main))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +248,7 @@ func TestInspectHookMentionsMarker(t *testing.T) {
 
 func TestInstallHookExecutable(t *testing.T) {
 	main := testutil.NewRepo(t)
-	repo := openRepo(t, main)
+	repo := open(t, main)
 
 	if _, err := InstallHook(repo, HookOptions{}); err != nil {
 		t.Fatal(err)
@@ -205,7 +272,7 @@ func TestInstallHookExecutable(t *testing.T) {
 
 func TestInstallHookForeign(t *testing.T) {
 	main := testutil.NewRepo(t)
-	repo := openRepo(t, main)
+	repo := open(t, main)
 	foreign := filepath.Join(main, ".git", "hooks", "post-checkout")
 	testutil.WriteFile(t, foreign, "#!/bin/sh\necho someone else\n")
 
@@ -225,7 +292,7 @@ func TestInstallHookForeign(t *testing.T) {
 
 func TestInstallHookForce(t *testing.T) {
 	main := testutil.NewRepo(t)
-	repo := openRepo(t, main)
+	repo := open(t, main)
 	testutil.WriteFile(t, filepath.Join(main, ".git", "hooks", "post-checkout"), "#!/bin/sh\necho someone else\n")
 
 	if _, err := InstallHook(repo, HookOptions{Replace: true}); err != nil {
@@ -245,7 +312,7 @@ func TestInstallHookInWorkTree(t *testing.T) {
 	main := testutil.NewRepo(t)
 	testutil.Git(t, main, "config", "core.hooksPath", ".husky")
 
-	_, err := InstallHook(openRepo(t, main), HookOptions{})
+	_, err := InstallHook(open(t, main), HookOptions{})
 
 	if !errors.Is(err, ErrHookDirInWorkTree) {
 		t.Fatalf("got %v, want ErrHookDirInWorkTree", err)
@@ -264,7 +331,7 @@ func TestInstallHookThroughSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := InstallHook(openRepo(t, main), HookOptions{Replace: true}); err != nil {
+	if _, err := InstallHook(open(t, main), HookOptions{Replace: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -279,7 +346,7 @@ func TestInstallHookThroughSymlink(t *testing.T) {
 
 func TestHookRunsOnNewWorktree(t *testing.T) {
 	main := testutil.NewRepo(t)
-	if _, err := InstallHook(openRepo(t, main), HookOptions{}); err != nil {
+	if _, err := InstallHook(open(t, main), HookOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -299,7 +366,7 @@ func TestHookRunsOnNewWorktree(t *testing.T) {
 
 func TestHookIgnoresFileCheckout(t *testing.T) {
 	main := testutil.NewRepo(t)
-	if _, err := InstallHook(openRepo(t, main), HookOptions{}); err != nil {
+	if _, err := InstallHook(open(t, main), HookOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	log := stubHoltOnPath(t)
@@ -327,7 +394,7 @@ func stubHoltOnPath(t *testing.T) string {
 }
 
 func TestShellQuoteApostrophe(t *testing.T) {
-	got := shellQuote("/Users/max's tools/holt")
+	got := ShellQuote("/Users/max's tools/holt")
 
 	if want := `'/Users/max'\''s tools/holt'`; got != want {
 		t.Fatalf("got %s, want %s", got, want)

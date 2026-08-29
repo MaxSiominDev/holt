@@ -72,6 +72,22 @@ func TestListPorcelainFields(t *testing.T) {
 	}
 }
 
+func TestListPorcelainLeavesDriftEmptyWhenGitCannotCompare(t *testing.T) {
+	main := testutil.NewRepo(t)
+	// No origin, so there is nothing to compare against and no answer to give.
+	t.Chdir(main)
+
+	stdout, _ := runHolt(t, "ls", "--porcelain")
+
+	// Zeroes here would read as "exactly in sync" to whatever is parsing this,
+	// which is the one thing holt cannot tell it.
+	record := rowFor(t, stdout, "main")
+	want := []string{"main", "", "", "", main}
+	if got := strings.Split(record, "\t"); !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestListEmptyDriftNote(t *testing.T) {
 	main := testutil.NewRepo(t)
 	testutil.AddWorktree(t, main, "feature")
@@ -84,6 +100,28 @@ func TestListEmptyDriftNote(t *testing.T) {
 	}
 	if strings.Contains(stdout, "no ahead/behind") {
 		t.Errorf("the note landed on stdout:\n%s", stdout)
+	}
+}
+
+func TestListDriftNoteWhenGitWillNotCompare(t *testing.T) {
+	main := testutil.NewRepo(t)
+	testutil.SetOriginHead(t, main, "main")
+	testutil.AddWorktree(t, main, "feature")
+	// The ref is here and this git can compare, so git is refusing the comparison
+	// itself, which holt cannot name and must not report as a missing ref.
+	tree := testutil.Git(t, main, "rev-parse", "HEAD^{tree}")
+	testutil.Git(t, main, "update-ref", "refs/remotes/origin/main", tree)
+	t.Chdir(main)
+
+	_, stderr := runHolt(t, "ls")
+
+	if !strings.Contains(stderr, "no ahead/behind numbers") {
+		t.Errorf("stderr is %q, want it to explain the empty columns", stderr)
+	}
+	// The branch holt resolved through has to be in the note, since that is the
+	// one thing holt knows about a failure it cannot otherwise explain.
+	if !strings.Contains(stderr, "origin/main") {
+		t.Errorf("stderr %q does not name the branch the comparison was against", stderr)
 	}
 }
 
@@ -141,6 +179,20 @@ func TestWorktreeLabels(t *testing.T) {
 		{
 			name:   "detached head",
 			status: worktree.Status{Worktree: worktree.Worktree{Detached: true}},
+			branch: "(detached)", drift: "", state: "",
+		},
+		{
+			// git detaches HEAD during a rebase, and holt reads back the branch name
+			// that "holt cd" and --porcelain both answer to.
+			name:   "stopped in a rebase",
+			status: worktree.Status{Worktree: worktree.Worktree{Branch: "feature", Detached: true, Rebasing: true}},
+			branch: "feature", drift: "", state: "",
+		},
+		{
+			// A rebase begun detached: git records "detached HEAD" where the branch would
+			// be, and holt keeps the name empty, so the column would come out blank.
+			name:   "stopped in a rebase begun detached",
+			status: worktree.Status{Worktree: worktree.Worktree{Detached: true, Rebasing: true}},
 			branch: "(detached)", drift: "", state: "",
 		},
 		{

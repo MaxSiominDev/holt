@@ -23,7 +23,8 @@ func newListCommand() *cobra.Command {
 		GroupID: groupWorktrees,
 		Long: "Shows each worktree with how far its branch has drifted from the default\n" +
 			"branch and whether it holds uncommitted work. The drift columns stay empty\n" +
-			"when there is no remote default branch to compare against.",
+			"when there is nothing to compare against, and on git older than 2.41, which\n" +
+			"cannot count; holt says which it was.",
 		Args:    cobra.NoArgs,
 		Aliases: []string{"list"},
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -46,7 +47,8 @@ func newListCommand() *cobra.Command {
 	}
 	command.Flags().BoolVar(&porcelain, "porcelain", false,
 		"one tab-separated record per worktree: branch, ahead, behind, state, path "+
-			"(an empty branch means a detached HEAD or a bare repository)")
+			"(an empty branch means a bare repository or a detached HEAD, though a "+
+			"worktree stopped mid-rebase carries the branch it will go back to)")
 	return command
 }
 
@@ -58,7 +60,8 @@ func noteMissingDrift(out io.Writer, repo *git.Repo, statuses []worktree.Status)
 		return
 	}
 
-	if _, err := worktree.DefaultBranch(repo); err != nil {
+	defaultBranch, err := worktree.DefaultBranch(repo)
+	if err != nil {
 		fmt.Fprintf(out, "holt: no ahead/behind numbers, %v\n", err)
 		return
 	}
@@ -66,7 +69,9 @@ func noteMissingDrift(out io.Writer, repo *git.Repo, statuses []worktree.Status)
 		fmt.Fprintln(out, "holt: no ahead/behind numbers, this git cannot compare branches in one call (git 2.41 or newer can)")
 		return
 	}
-	fmt.Fprintln(out, "holt: no ahead/behind numbers, origin has no copy of the default branch yet")
+	// Whatever is left: the ref is here and this git can compare, so the trouble
+	// is between the two and holt cannot name it.
+	fmt.Fprintf(out, "holt: no ahead/behind numbers, git would not compare the branches against origin/%s\n", defaultBranch)
 }
 
 func writeWorktreeTable(out io.Writer, statuses []worktree.Status) error {
@@ -99,7 +104,9 @@ func branchLabel(status worktree.Status) string {
 	switch {
 	case status.Bare:
 		return "(bare)"
-	case status.Detached:
+	// A rebase parks HEAD on a commit, but holt reads the branch back out of the
+	// rebase state; only one begun detached leaves no name to read.
+	case status.Detached && status.Branch == "":
 		return "(detached)"
 	default:
 		return status.Branch

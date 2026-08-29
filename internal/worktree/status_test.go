@@ -9,6 +9,54 @@ import (
 	"github.com/MaxSiominDev/holt/internal/testutil"
 )
 
+func TestMarkStateWorktreePathReusedByAnotherRepository(t *testing.T) {
+	main := testutil.NewRepo(t)
+	linked := testutil.AddWorktree(t, main, "feature")
+	// The worktree deleted by hand without "git worktree prune", and the path
+	// later used for a project of its own. git still lists the entry.
+	if err := os.RemoveAll(linked); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(linked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Git(t, linked, "init", "--quiet", ".")
+	testutil.WriteFile(t, filepath.Join(linked, "wip.txt"), "somebody else's\n")
+	statuses := []Status{{Worktree: Worktree{Path: linked}}}
+
+	MarkState(open(t, main), statuses)
+
+	// A .git of its own passes an existence check and the status answers for that
+	// repository, so the worktree comes back dirty by somebody else's files.
+	if statuses[0].State != StateBroken {
+		t.Fatalf("state is %q, want %q", statuses[0].State, StateBroken)
+	}
+}
+
+func TestMarkStateWorktreeWithoutItsGitFileInsideAnotherRepository(t *testing.T) {
+	outer := testutil.NewRepo(t)
+	// The project cloned inside a repository of the user's own, which is an
+	// ordinary way to keep one.
+	origin := testutil.NewRepo(t)
+	main := filepath.Join(outer, "project")
+	testutil.Git(t, outer, "clone", "--quiet", origin, main)
+	testutil.Git(t, main, "config", "user.email", "holt@example.com")
+	testutil.Git(t, main, "config", "user.name", "holt")
+	linked := testutil.AddWorktree(t, main, "feature")
+	if err := os.Remove(filepath.Join(linked, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	statuses := []Status{{Worktree: Worktree{Path: linked}}}
+
+	MarkState(open(t, main), statuses)
+
+	// Without its own .git, discovery walks up and the status answers for the outer
+	// repository, so the worktree comes back clean or dirty by somebody else's files.
+	if statuses[0].State != StateBroken {
+		t.Fatalf("state is %q, want %q", statuses[0].State, StateBroken)
+	}
+}
+
 func TestStatusesDrift(t *testing.T) {
 	main := testutil.NewRepo(t)
 	testutil.SetOriginHead(t, main, "main")
@@ -152,6 +200,24 @@ func TestSupportsDriftEmptyRepo(t *testing.T) {
 	}
 }
 
+func TestSupportsDriftOnAGitWithoutTheAtom(t *testing.T) {
+	repo := testutil.NewRepo(t)
+	// A git older than 2.41 knows no ahead-behind atom and says so, which decides
+	// between naming the version and blaming the comparison.
+	stub := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$*\" != \"${*#*ahead-behind}\" ]; then\n" +
+		"  echo \"fatal: unknown field name: ahead-behind:HEAD\" >&2\n  exit 128\nfi\n" +
+		"exec /usr/bin/git \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(stub, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", stub+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if SupportsDrift(open(t, repo)) {
+		t.Fatal("a git that does not know the atom was reported as able to compare")
+	}
+}
+
 func TestParseAheadBehind(t *testing.T) {
 	tests := []struct {
 		name string
@@ -165,7 +231,7 @@ func TestParseAheadBehind(t *testing.T) {
 		},
 		{
 			name: "a branch with no counts is skipped",
-			out:  "main\t0 0\northogonal\t\n",
+			out:  "main\t0 0\n" + "orthogonal\t\n",
 			want: map[string]drift{"main": {ahead: 0, behind: 0}},
 		},
 		{
@@ -228,4 +294,19 @@ func find(t *testing.T, statuses []Status, branch string) Status {
 	}
 	t.Fatalf("no worktree on branch %q in %+v", branch, statuses)
 	return Status{}
+}
+
+func TestStatusesLeaveBareRepositoryUnstated(t *testing.T) {
+	bare := testutil.NewBareRepo(t)
+
+	statuses, err := Statuses(open(t, bare))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A bare repository has no working tree, so asking git for its state means
+	// asking about a checkout that was never there.
+	if statuses[0].State != StateClean {
+		t.Fatalf("the bare repository is marked %v", statuses[0].State)
+	}
 }

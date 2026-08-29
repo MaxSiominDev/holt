@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +10,28 @@ import (
 	"github.com/MaxSiominDev/holt/internal/testutil"
 	"github.com/spf13/cobra"
 )
+
+func TestCdUnreadableWorktreeIsNotCalledGone(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode says")
+	}
+	main := testutil.NewRepo(t)
+	feature := testutil.AddWorktree(t, main, "feature")
+	// The directory is there and unreadable, which "holt ls" and doctor both say;
+	// calling it gone sends the user after a directory that never left.
+	parent := filepath.Dir(feature)
+	if err := os.Chmod(parent, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+	t.Chdir(main)
+
+	err := runHoltExpectingFailure(t, "cd", "feature")
+
+	if strings.Contains(err.Error(), "gone") {
+		t.Errorf("error %q calls a directory that is still there gone", err)
+	}
+}
 
 func TestCdPrintsOnlyPath(t *testing.T) {
 	main := testutil.NewRepo(t)
@@ -43,6 +66,36 @@ func TestCdWithoutBranch(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "feature") {
 		t.Errorf("error %q does not list the worktrees that exist", err)
+	}
+}
+
+func TestCdWithNoBranchAnywhere(t *testing.T) {
+	main := testutil.NewRepo(t)
+	// A worktree git made with --detach. holt never makes one, and reaches
+	// worktrees by branch name, so there is nothing here for "holt cd" to take.
+	testutil.Git(t, main, "worktree", "add", "--quiet", "--detach",
+		filepath.Join(filepath.Dir(main), filepath.Base(main)+"-worktrees", "review"))
+	t.Chdir(main)
+
+	err := runHoltExpectingFailure(t, "cd")
+
+	// "holt ls" one command earlier lists the worktree, so denying it exists
+	// sends the user looking for a fault that is not there.
+	if strings.Contains(err.Error(), "no linked worktrees yet") {
+		t.Errorf("error %q denies a worktree that holt lists", err)
+	}
+}
+
+func TestCdWithNoWorktreesAtAll(t *testing.T) {
+	main := testutil.NewRepo(t)
+	t.Chdir(main)
+
+	err := runHoltExpectingFailure(t, "cd")
+
+	// git lists the main checkout too, so a count forgetting it swaps this message
+	// for the one about worktrees carrying no branch.
+	if !strings.Contains(err.Error(), "no linked worktrees yet") {
+		t.Errorf("error %q does not say the repository has none", err)
 	}
 }
 

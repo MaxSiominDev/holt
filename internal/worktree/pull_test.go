@@ -56,6 +56,25 @@ func TestPullBranchNamedLikeFlag(t *testing.T) {
 	}
 }
 
+func TestPullPrefersBranchOverSameNamedTag(t *testing.T) {
+	clone, origin := testutil.NewClonedRepo(t)
+	testutil.Git(t, clone, "switch", "--quiet", "--create", "feature")
+	testutil.Git(t, clone, "push", "--quiet", "origin", "feature")
+	// A tag of the same name left at a commit the branch has moved off: git resolves
+	// a bare name as a tag first, so the pull merges the tag and reports up to date.
+	testutil.Git(t, origin, "tag", "feature")
+	wanted := testutil.CommitTo(t, origin, "theirs.txt", "their work\n")
+	testutil.Git(t, origin, "update-ref", "refs/heads/feature", wanted)
+
+	if err := Pull(open(t, clone), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := testutil.Git(t, clone, "rev-parse", "HEAD"); got != wanted {
+		t.Fatalf("the branch is at %s, want origin's %s: the tag was merged instead", got, wanted)
+	}
+}
+
 func TestPullDetachedHead(t *testing.T) {
 	clone, _ := testutil.NewClonedRepo(t)
 	testutil.Git(t, clone, "checkout", "--quiet", "--detach")

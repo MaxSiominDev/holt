@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MaxSiominDev/holt/internal/git"
@@ -27,12 +28,17 @@ func TestOpenMissingDirectory(t *testing.T) {
 	if errors.Is(err, git.ErrNotARepository) {
 		t.Error("a missing directory was reported as a missing repository")
 	}
+	// Go's own words for this name a call the user never made.
+	if strings.Contains(err.Error(), "lstat") {
+		t.Errorf("error %q is Go's rather than holt's", err)
+	}
 }
 
 func TestGitDirInMainCheckout(t *testing.T) {
 	repo := testutil.NewRepo(t)
 
-	// git answers ".git" here; only a linked worktree gets an absolute path.
+	// git answers ".git" from the top of the main checkout; from a subdirectory
+	// or a linked worktree it answers an absolute path.
 	gitDir, err := open(t, repo).GitDir()
 	if err != nil {
 		t.Fatal(err)
@@ -191,6 +197,23 @@ func TestOutputExitError(t *testing.T) {
 	}
 }
 
+func TestOutputExitErrorWithoutStderr(t *testing.T) {
+	opened := open(t, testutil.NewRepo(t))
+
+	// --quiet, which is how holt asks this question everywhere it asks it: git
+	// then says nothing at all and only the status carries the answer.
+	_, err := opened.Output("rev-parse", "--quiet", "--verify", "refs/heads/missing")
+
+	if err == nil {
+		t.Fatal("a ref that is not there was reported as found")
+	}
+	// Without a fallback the message ends at the colon, and the user is left
+	// with a sentence naming a command and no reason at all.
+	if !strings.Contains(err.Error(), "exit status") {
+		t.Errorf("error %q says nothing about what happened", err)
+	}
+}
+
 func TestOutputForcesCLocale(t *testing.T) {
 	main := testutil.NewRepo(t)
 	// holt reads git's messages, which git translates unless LC_ALL is C. An
@@ -208,6 +231,38 @@ func TestOutputForcesCLocale(t *testing.T) {
 	}
 }
 
+func TestOutputIgnoresInheritedGitDir(t *testing.T) {
+	here := testutil.NewRepo(t)
+	elsewhere := testutil.NewRepo(t)
+	t.Setenv("GIT_DIR", filepath.Join(elsewhere, ".git"))
+
+	common, err := open(t, here).CommonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// --show-toplevel answers "here" either way, the working tree falling back to
+	// the current directory; it is the repository directory that moves.
+	if want := filepath.Join(here, ".git"); common != want {
+		t.Fatalf("git ran against %q, want %q", common, want)
+	}
+}
+
+func TestOutputIgnoresInheritedIndexFile(t *testing.T) {
+	here := testutil.NewRepo(t)
+	worktree := testutil.AddWorktree(t, here, "feature")
+	// git hands hooks a relative GIT_INDEX_FILE, resolved against whatever directory the
+	// command runs in, so inherited it reads a linked worktree through a .git that is a
+	// file, where the status fails on a path that is not an index at all.
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(".git", "index"))
+
+	_, err := open(t, worktree).Output("--no-optional-locks", "status", "--porcelain")
+
+	if err != nil {
+		t.Fatalf("git ran against the caller's index: %v", err)
+	}
+}
+
 func open(t *testing.T, dir string) *git.Repo {
 	t.Helper()
 	repo, err := git.Open(dir)
@@ -215,4 +270,21 @@ func open(t *testing.T, dir string) *git.Repo {
 		t.Fatal(err)
 	}
 	return repo
+}
+
+func TestOutputKeepsTrailingSpace(t *testing.T) {
+	dir := testutil.NewRepo(t)
+	repo := open(t, dir)
+	// A path may end in a space, and so may anything else git prints. Trimming
+	// space rather than the line ending would quietly shorten it.
+	testutil.Git(t, dir, "config", "holt.test", "value with a trailing ")
+
+	got, err := repo.Output("config", "--get", "holt.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "value with a trailing "; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
 }

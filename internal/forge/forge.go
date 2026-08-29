@@ -3,13 +3,15 @@ package forge
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"os/exec"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/MaxSiominDev/holt/internal/git"
 )
@@ -25,6 +27,10 @@ const (
 // KindKey names the forge when the host name does not.
 const KindKey = "holt.forge"
 
+// HostKey names the host the web UI answers on, for a remote that does not, an ssh
+// Host alias being the ordinary reason. Asking ssh answers a different question.
+const HostKey = "holt.forgeHost"
+
 // ChangeRequestURL returns the request already raised from branch where that
 // can be told, otherwise the page to raise one.
 func ChangeRequestURL(repo *git.Repo, branch, defaultBranch string, notes io.Writer) (string, error) {
@@ -35,6 +41,13 @@ func ChangeRequestURL(repo *git.Repo, branch, defaultBranch string, notes io.Wri
 	remote, err := parseRemote(origin)
 	if err != nil {
 		return "", err
+	}
+	configuredHost, err := forgeHost(repo)
+	if err != nil {
+		return "", err
+	}
+	if configuredHost != "" {
+		remote.host = configuredHost
 	}
 	kind, err := kindOf(repo, remote.host)
 	if err != nil {
@@ -53,34 +66,52 @@ const (
 	glabCommand = "glab"
 )
 
-// An empty string means there is no open request, or that the forge's own tool
-// is absent or could not answer.
+// Or a tool waiting on a dead network hangs holt open. A var so the test need not wait.
+var lookupTimeout = 10 * time.Second
+
+// Empty means no open request, or a forge tool absent or unable to answer.
 func existingRequestURL(remote remoteRepo, kind forgeKind, branch string, notes io.Writer) string {
 	name, args := lookupCommand(kind, remote, branch)
 	if _, err := exec.LookPath(name); err != nil {
 		return "" // ordinary: the address holt builds needs no CLI
 	}
 
-	command := exec.Command(name, args...)
-	command.Env = append(os.Environ(), "LC_ALL=C")
+	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, name, args...)
+	// Killing the tool alone is not enough: a child holding the pipe would keep
+	// the read waiting.
+	command.WaitDelay = time.Second
+	command.Env = append(git.EnvWithoutRedirects(), "LC_ALL=C")
 
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	out, err := command.Output()
 	if err != nil {
-		// Installed and still no answer, usually an expired token. Falling back
+		// Installed and still no answer, usually an expired token; falling back
 		// quietly would read as the request having gone.
-		fmt.Fprintf(notes, "holt: %s could not be asked about an open request: %s\n",
-			name, firstLine(stderr.String()))
+		reason := firstLine(stderr.String())
+		switch {
+		case ctx.Err() != nil:
+			reason = "it did not answer in " + lookupTimeout.String()
+		case reason == "":
+			// The line names a cause, which a silent failure leaves hanging. Only its own exit
+			// status: a failure to start speaks Go and carries the binary's full path.
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
+				reason = err.Error()
+			} else {
+				reason = "holt could not run it"
+			}
+		}
+		fmt.Fprintf(notes, "holt: %s could not be asked about an open request: %s\n", name, reason)
 		return ""
 	}
 	return browsableURL(string(out))
 }
 
-// Both tools are asked for the bare address rather than JSON: glab passes the
-// merge request description through unescaped, and one holding a newline makes
-// the whole document invalid. The host travels with the repository, or glab
-// asks gitlab.com and answers 404 for a company instance.
+// --jq extracts, so holt never parses a document glab may write a raw newline into,
+// which Go's decoder refuses. The repository carries its host, or glab asks gitlab.com.
 func lookupCommand(kind forgeKind, remote remoteRepo, branch string) (string, []string) {
 	repository := remote.host + "/" + remote.path
 	if kind == gitLab {
@@ -98,8 +129,9 @@ func lookupCommand(kind forgeKind, remote remoteRepo, branch string) (string, []
 		"--jq", ".[].url"}
 }
 
-// browsableURL accepts only what can be handed to a browser, so a tool that
-// answered something else falls back to the page holt builds itself.
+// browsableURL takes an https address and nothing else, so a usage error, a table or a
+// self-hosted forge served over plain http falls back to the page holt builds, which
+// costs whoever runs one the link to an existing request and no more.
 func browsableURL(out string) string {
 	line := firstLine(out)
 	if !strings.HasPrefix(line, "https://") {
@@ -110,7 +142,28 @@ func browsableURL(out string) string {
 
 func firstLine(text string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
-	return line
+	return strings.TrimSpace(line)
+}
+
+// A host and nothing else, since a scheme or path would come back escaped into
+// nonsense; read through a URL, so a port and an IPv6 literal still pass.
+func forgeHost(repo *git.Repo) (string, error) {
+	configured, set, err := repo.Config(HostKey)
+	if err != nil || !set {
+		return "", err
+	}
+	host := strings.TrimSpace(configured)
+	if host == "" {
+		return "", fmt.Errorf("%s is set to nothing; unset it or give it a host name", HostKey)
+	}
+	// Host keeps the port, so a bare port round-trips through it while Hostname
+	// comes back empty; a trailing colon is a port the user left off.
+	parsed, err := url.Parse("https://" + host)
+	if err != nil || parsed.Host != host || parsed.User != nil ||
+		parsed.Hostname() == "" || strings.HasSuffix(host, ":") {
+		return "", fmt.Errorf("%s is set to %q; it takes a host name on its own, without a scheme, a path or a user", HostKey, configured)
+	}
+	return host, nil
 }
 
 func kindOf(repo *git.Repo, host string) (forgeKind, error) {
@@ -132,7 +185,7 @@ func kindOf(repo *git.Repo, host string) (forgeKind, error) {
 	kind, recognised := detectKind(host)
 	if !recognised {
 		// Guessing would open a plausible address that goes nowhere.
-		return "", fmt.Errorf("cannot tell what runs %s, set it with %q", host, "git config "+KindKey+" gitlab")
+		return "", fmt.Errorf("cannot tell what runs %s, set it with %q", host, "git config "+KindKey+" <github|gitlab>")
 	}
 	return kind, nil
 }
@@ -142,15 +195,12 @@ type remoteRepo struct {
 	path string // group/platform/v9/stream-connector
 }
 
-// The path is kept whole rather than split into owner and repository, since
-// GitLab nests groups several deep.
+// The path is kept whole rather than split, since GitLab nests groups deep.
 func parseRemote(remote string) (remoteRepo, error) {
-	// Trailing slashes come off first: git accepts "repo.git/" verbatim, and
-	// stripping ".git" before them would leave it in the path.
+	// Trailing slashes come off first, or "repo.git/" keeps its suffix.
 	trimmed := strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(remote), "/"), ".git")
 
-	// In "git@host:path" the colon separates host from path rather than
-	// introducing a port, so url.Parse misreads it.
+	// In "git@host:path" the colon is not a port, so url.Parse misreads it.
 	if !strings.Contains(trimmed, "://") {
 		host, repoPath, found := strings.Cut(trimmed, ":")
 		if !found {
@@ -170,11 +220,13 @@ func parseRemote(remote string) (remoteRepo, error) {
 	return newRemote(parsed.Hostname(), parsed.Path, remote)
 }
 
+// Host names ignore case, and so does whoever types holt.forgeHost.
 func detectKind(host string) (forgeKind, bool) {
+	lowered := strings.ToLower(host)
 	switch {
-	case strings.Contains(host, "github"):
+	case strings.Contains(lowered, "github"):
 		return gitHub, true
-	case strings.Contains(host, "gitlab"):
+	case strings.Contains(lowered, "gitlab"):
 		return gitLab, true
 	}
 	return "", false

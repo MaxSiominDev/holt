@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/MaxSiominDev/holt/internal/git"
+	"github.com/MaxSiominDev/holt/internal/worktree"
 )
 
 const (
@@ -46,26 +47,38 @@ func HookDir(repo *git.Repo) (dir string, insideWorkTree bool, err error) {
 		return filepath.Join(commonDir, "hooks"), false, nil
 	}
 
-	toplevel, err := repo.Toplevel()
+	worktrees, err := worktree.List(repo)
 	if err != nil {
-		if filepath.IsAbs(configured) {
-			// A bare repository has no working tree to be inside of.
-			return filepath.Clean(configured), false, nil
-		}
 		return "", false, err
 	}
-
 	dir = configured
 	if !filepath.IsAbs(dir) {
-		// git resolves a relative core.hooksPath against the working tree root.
-		dir = filepath.Join(toplevel, dir)
+		// git resolves a relative core.hooksPath against the working tree of the moment, so
+		// holt names one file, the main checkout's, which is the hook run as worktrees are made.
+		if worktrees[0].Bare {
+			// Which a bare repository is not, whatever its worktrees hold.
+			return "", false, fmt.Errorf("core.hooksPath is %s, and holt was called in a bare repository, which is no working tree to resolve it against", configured)
+		}
+		dir = filepath.Join(worktrees[0].Path, dir)
 	}
 	dir = filepath.Clean(dir)
 
 	// .git sits below the working tree by path, which is what separates
 	// ".git/hooks" from a tracked ".husky".
 	resolved := resolveExisting(dir)
-	return dir, under(resolved, toplevel) && !under(resolved, commonDir), nil
+	if under(resolved, commonDir) {
+		return dir, false, nil
+	}
+	// Every worktree, not the one holt was called in, or the same path is refused
+	// from the main checkout and written from a linked one.
+	for _, w := range worktrees {
+		// A bare repository's entry names the repository directory, already taken
+		// above; its linked worktrees are working trees like any other.
+		if !w.Bare && under(resolved, resolveExisting(w.Path)) {
+			return dir, true, nil
+		}
+	}
+	return dir, false, nil
 }
 
 // InspectHook reports where the hook would live and what is there.
@@ -99,7 +112,11 @@ type HookOptions struct {
 
 // InstallHook writes the hook that mirrors into each worktree as git makes it.
 func InstallHook(repo *git.Repo, options HookOptions) (string, error) {
-	replace := options.Replace
+	// The hook runs "holt mirror sync", which has nothing to mirror from in a bare
+	// repository, so installed there it only talks on every checkout.
+	if _, err := MainCheckout(repo); err != nil {
+		return "", err
+	}
 	dir, insideWorkTree, err := HookDir(repo)
 	if err != nil {
 		return "", err
@@ -112,7 +129,7 @@ func InstallHook(repo *git.Repo, options HookOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if state == HookForeign && !replace {
+	if state == HookForeign && !options.Replace {
 		return "", fmt.Errorf("%w: %s", ErrForeignHook, path)
 	}
 
@@ -147,10 +164,12 @@ top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 
 # A checkout has to succeed even when mirroring does not.
 exit 0
-`, hookMarker, shellQuote(fallbackBinary))
+`, hookMarker, ShellQuote(fallbackBinary))
 }
 
-func shellQuote(s string) string {
+// Single quotes take everything literally, except a quote of their own, which is
+// closed, escaped and reopened. Used for the hook and for anything typed back.
+func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
@@ -167,8 +186,8 @@ func resolveExisting(path string) string {
 	return filepath.Join(resolveExisting(parent), filepath.Base(path))
 }
 
-// IsLocal compares whole components, so "..hooks" is a name inside base and
-// "../hooks" is not.
+// Compared as whole path components, so "..hooks" is a name inside base while
+// "../hooks" is a step out of it.
 func under(path, base string) bool {
 	rel, err := filepath.Rel(base, path)
 	return err == nil && filepath.IsLocal(rel)

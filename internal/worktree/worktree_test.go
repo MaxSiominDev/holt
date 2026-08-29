@@ -3,6 +3,7 @@ package worktree
 import (
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -67,7 +68,7 @@ func TestParseList(t *testing.T) {
 			},
 		},
 		{
-			name: "attributes holt does not model are skipped",
+			name: "a lock is read, and its reason and prunable are skipped",
 			out: strings.Join([]string{
 				"worktree /repos/project",
 				"HEAD 5555555555555555555555555555555555555555",
@@ -77,7 +78,7 @@ func TestParseList(t *testing.T) {
 				"",
 			}, "\x00"),
 			want: []Worktree{
-				{Path: "/repos/project", Branch: "master"},
+				{Path: "/repos/project", Branch: "master", Locked: true},
 			},
 		},
 		{
@@ -117,10 +118,9 @@ func TestParseList(t *testing.T) {
 
 func TestDefaultBranchNoOriginHead(t *testing.T) {
 	main := testutil.NewRepo(t)
-	// An origin, but nothing recording its default and no main or master known
-	// on it. The remedy differs from the no-origin one.
+	// An origin with no recorded default and no main or master on it, whose remedy
+	// differs from the no-origin one.
 	testutil.Git(t, main, "remote", "add", "origin", filepath.Join(main, "..", "origin.git"))
-	testutil.Git(t, main, "branch", "--move", "trunk")
 
 	_, err := DefaultBranch(open(t, main))
 
@@ -278,7 +278,13 @@ func TestFetchDefaultBranchQuiet(t *testing.T) {
 	clone, _ := testutil.NewClonedRepo(t)
 
 	var progress strings.Builder
-	_, _ = FetchDefaultBranch(open(t, clone), &progress)
+	branch, err := FetchDefaultBranch(open(t, clone), &progress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branch != "main" {
+		t.Fatalf("got %q, so the fetch this is about never happened", branch)
+	}
 
 	// git's fetch output belongs here; a move that never happened does not.
 	if strings.Contains(progress.String(), "holt:") {
@@ -352,8 +358,8 @@ func TestDefaultBranchNoRemote(t *testing.T) {
 
 	_, err := DefaultBranch(open(t, repo))
 
-	if err == nil {
-		t.Fatal("expected an error in a repository with no remote")
+	if !errors.Is(err, ErrNoDefaultBranch) {
+		t.Fatalf("error %q is not ErrNoDefaultBranch", err)
 	}
 	// "git remote set-head origin" fails without an origin.
 	if strings.Contains(err.Error(), "set-head") {
@@ -364,20 +370,6 @@ func TestDefaultBranchNoRemote(t *testing.T) {
 	}
 }
 
-func TestDefaultBranchNoBranches(t *testing.T) {
-	repo := testutil.NewRepo(t)
-	testutil.Git(t, repo, "remote", "add", "origin", "https://example.invalid/repo.git")
-
-	_, err := DefaultBranch(open(t, repo))
-
-	if err == nil {
-		t.Fatal("expected an error when origin has no known branches")
-	}
-	if !strings.Contains(err.Error(), "git remote set-head") {
-		t.Errorf("error %q does not offer to repair origin/HEAD", err)
-	}
-}
-
 func open(t *testing.T, dir string) *git.Repo {
 	t.Helper()
 	repo, err := git.Open(dir)
@@ -385,4 +377,258 @@ func open(t *testing.T, dir string) *git.Repo {
 		t.Fatal(err)
 	}
 	return repo
+}
+
+func TestFindRejectsEmptyBranch(t *testing.T) {
+	repo := testutil.NewRepo(t)
+	testutil.AddWorktree(t, repo, "keep")
+	detached := filepath.Join(filepath.Dir(repo), "review")
+	testutil.Git(t, repo, "worktree", "add", "--quiet", "--detach", detached)
+
+	// The detached worktree is the one an empty name would reach.
+	_, err := Find(open(t, repo), "")
+
+	if err == nil {
+		t.Fatal("an empty branch name matched a worktree")
+	}
+}
+
+func TestListMainPathWithSeparateGitDir(t *testing.T) {
+	root := testutil.Root(t)
+	gitDir := filepath.Join(root, "projgit")
+	checkout := filepath.Join(root, "proj")
+	testutil.Git(t, root, "init", "--quiet", "--separate-git-dir", gitDir, checkout)
+	testutil.Git(t, checkout, "config", "user.email", "holt@example.com")
+	testutil.Git(t, checkout, "config", "user.name", "holt")
+	testutil.WriteFile(t, filepath.Join(checkout, "README.md"), "x\n")
+	testutil.Git(t, checkout, "add", ".")
+	testutil.Git(t, checkout, "commit", "--quiet", "-m", "init")
+	// The repository directory is not named .git, so git reports it as the main
+	// worktree though it holds no checkout, and holt would mirror into it.
+	if listed := testutil.Git(t, checkout, "worktree", "list", "--porcelain"); !strings.Contains(listed, gitDir) {
+		t.Fatalf("the fixture no longer reproduces the case; git listed:\n%s", listed)
+	}
+
+	worktrees, err := List(open(t, checkout))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if worktrees[0].Path != checkout {
+		t.Fatalf("main checkout is %q, want the working tree at %q", worktrees[0].Path, checkout)
+	}
+}
+
+func TestListMainPathFromALinkedWorktreeOfASubmodule(t *testing.T) {
+	root := testutil.Root(t)
+	gitDir := filepath.Join(root, "modules", "sub")
+	checkout := filepath.Join(root, "sub")
+	if err := os.MkdirAll(filepath.Dir(gitDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Git(t, root, "init", "--quiet", "--separate-git-dir", gitDir, checkout)
+	// What "git submodule add" leaves: the repository directory sits in the
+	// superproject and records its checkout, which a --separate-git-dir clone does not.
+	testutil.Git(t, checkout, "config", "core.worktree", filepath.Join("..", "..", "sub"))
+	testutil.Git(t, checkout, "config", "user.email", "holt@example.com")
+	testutil.Git(t, checkout, "config", "user.name", "holt")
+	testutil.WriteFile(t, filepath.Join(checkout, "README.md"), "x\n")
+	testutil.Git(t, checkout, "add", ".")
+	testutil.Git(t, checkout, "commit", "--quiet", "-m", "init")
+	linked := filepath.Join(root, "sub-worktrees", "feature")
+	testutil.Git(t, checkout, "worktree", "add", "--quiet", "-b", "feature", linked)
+
+	worktrees, err := List(open(t, linked))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// git answers about the linked worktree, so the main entry comes from the
+	// repository itself; at git's fallback "holt home" walks into the superproject's .git.
+	if worktrees[0].Path != checkout {
+		t.Fatalf("main checkout is %q, want the working tree at %q", worktrees[0].Path, checkout)
+	}
+}
+
+func TestListLeavesTheMainPathGitAlreadyResolved(t *testing.T) {
+	main := testutil.NewRepo(t)
+	linked := testutil.AddWorktree(t, main, "feature")
+	// core.worktree set where it is not needed names somewhere other than the checkout
+	// git found, and read anyway it moves the main checkout out from under holt.
+	testutil.Git(t, main, "config", "core.worktree", filepath.Join(main, "..", "elsewhere"))
+
+	worktrees, err := List(open(t, linked))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if worktrees[0].Path != main {
+		t.Fatalf("main checkout is %q, want the working tree at %q", worktrees[0].Path, main)
+	}
+}
+
+func TestListDoesNotTakeABranchNameFromAnotherRepository(t *testing.T) {
+	main := testutil.NewRepo(t)
+	linked := testutil.AddWorktree(t, main, "feature")
+	testutil.Git(t, linked, "checkout", "--quiet", "--detach")
+	// A worktree deleted by hand without a prune, its path now a project of its own
+	// stopped in a rebase.
+	if err := os.RemoveAll(linked); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(linked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Git(t, linked, "init", "--quiet", ".")
+	testutil.WriteFile(t, filepath.Join(linked, ".git", "rebase-merge", "head-name"), "refs/heads/urgent-fix\n")
+
+	worktrees, err := List(open(t, main))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Read out of that directory, a stranger's branch is listed, completed and
+	// reached by "holt cd", shadowing a real worktree of the same name.
+	for _, w := range worktrees {
+		if w.Branch == "urgent-fix" {
+			t.Fatalf("holt named %s after a branch of another repository", w.Path)
+		}
+	}
+}
+
+func TestDefaultBranchAdviceForASingleBranchClone(t *testing.T) {
+	clone, _ := testutil.NewClonedRepo(t)
+	// What --single-branch leaves: origin's default is a branch never fetched here.
+	testutil.Git(t, clone, "config", "--replace-all", "remote.origin.fetch",
+		"+refs/heads/other:refs/remotes/origin/other")
+	testutil.Git(t, clone, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+	for _, branch := range []string{"main", "master"} {
+		_, _ = open(t, clone).Output("update-ref", "-d", "refs/remotes/origin/"+branch)
+	}
+
+	_, err := DefaultBranch(open(t, clone))
+
+	if err == nil {
+		t.Fatal("a default branch was named where nothing records one")
+	}
+	// set-head needs a remote-tracking ref no plain fetch brings in while the refspec
+	// stays narrow, so naming it alone leaves the user no way out.
+	if !strings.Contains(err.Error(), "remote.origin.fetch") {
+		t.Errorf("error %q leaves out the widening the other steps need", err)
+	}
+	// A bare clone records no refspec and lands here too, so a count is unknowable.
+	if strings.Contains(err.Error(), "one branch only") {
+		t.Errorf("error %q counts branches it has not looked at", err)
+	}
+}
+
+func TestDefaultBranchAdviceForAnOrdinaryClone(t *testing.T) {
+	clone, _ := testutil.NewClonedRepo(t)
+	testutil.Git(t, clone, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+	for _, branch := range []string{"main", "master"} {
+		_, _ = open(t, clone).Output("update-ref", "-d", "refs/remotes/origin/"+branch)
+	}
+
+	_, err := DefaultBranch(open(t, clone))
+
+	if err == nil {
+		t.Fatal("a default branch was named where nothing records one")
+	}
+	// Every branch is fetched already, so a fetch is all it takes, and advising a
+	// widening would leave a second copy of the wildcard.
+	if strings.Contains(err.Error(), "remote.origin.fetch") {
+		t.Errorf("error %q asks for a widening this repository does not need", err)
+	}
+	if !strings.Contains(err.Error(), "git fetch origin") {
+		t.Errorf("error %q leaves out the fetch that brings the branch in", err)
+	}
+}
+
+func TestDefaultBranchBrokenOriginConfig(t *testing.T) {
+	repo := testutil.NewRepo(t)
+	testutil.Git(t, repo, "remote", "add", "origin", filepath.Join(repo, "..", "origin.git"))
+	// A refspec git will not parse, which fails every command loading the remote,
+	// though "there is no origin" is the one thing that is not wrong.
+	testutil.Git(t, repo, "config", "--add", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/*")
+
+	_, err := DefaultBranch(open(t, repo))
+
+	if err == nil {
+		t.Fatal("a repository git itself refuses to read was accepted")
+	}
+	if strings.Contains(err.Error(), "no origin remote") {
+		t.Errorf("error %q blames a missing remote for a broken one", err)
+	}
+	if !strings.Contains(err.Error(), "invalid refspec") {
+		t.Errorf("error %q swallows what git actually said", err)
+	}
+}
+
+func TestFindBranchSpelledWithACombiningAccent(t *testing.T) {
+	clone, _ := testutil.NewClonedRepo(t)
+	// git precomposes and stores what it is given, so compared byte for byte holt
+	// makes a worktree it cannot afterwards find.
+	decomposed := "cafe\u0301"
+	composed := "caf\u00e9"
+	testutil.Git(t, clone, "branch", decomposed)
+	if stored := testutil.Git(t, clone, "for-each-ref", "--format=%(refname:short)", "refs/heads/"+decomposed); stored != composed {
+		t.Skipf("git stored the name as %q, so this platform does not precompose", stored)
+	}
+	testutil.Git(t, clone, "worktree", "add", "--quiet", filepath.Join(clone, "..", "wt"), composed)
+	// A tag of the same name, against which git disambiguates the short refname into
+	// heads/<name>, which no worktree carries.
+	testutil.Git(t, clone, "tag", composed)
+
+	found, err := Find(open(t, clone), decomposed)
+
+	if err != nil {
+		t.Fatalf("holt cannot find the worktree it would have made: %v", err)
+	}
+	if found.Branch != composed {
+		t.Errorf("found the worktree on %q, want the one on %q", found.Branch, composed)
+	}
+}
+
+func TestFindRefusesANameThatOnlyPrefixesABranch(t *testing.T) {
+	clone, _ := testutil.NewClonedRepo(t)
+	// git reads refs/heads/feat as a prefix and answers feat/inner, so "holt rm feat"
+	// would take a worktree the caller never named.
+	testutil.Git(t, clone, "branch", "feat/inner")
+	testutil.Git(t, clone, "worktree", "add", "--quiet", filepath.Join(clone, "..", "inner"), "feat/inner")
+
+	if _, err := Find(open(t, clone), "feat"); err == nil {
+		t.Error("a name that only prefixes a branch found the worktree on it")
+	}
+	// The same shape reached through a glob rather than a prefix.
+	if _, err := Find(open(t, clone), "feat*"); err == nil {
+		t.Error("a glob found the worktree on a branch it happened to match")
+	}
+}
+
+func TestFindRefusesTheGlobCharactersGitForbidsInAName(t *testing.T) {
+	clone, _ := testutil.NewClonedRepo(t)
+	// Neither character is allowed in a refname and "branch --list" reads both as
+	// pattern syntax, so each stands for whatever branch it happens to match.
+	testutil.Git(t, clone, "branch", "ab")
+	testutil.Git(t, clone, "worktree", "add", "--quiet", filepath.Join(clone, "..", "ab"), "ab")
+
+	for _, name := range []string{"a\\b", "a[b]"} {
+		if _, err := Find(open(t, clone), name); err == nil {
+			t.Errorf("%q found the worktree on a branch it happened to match", name)
+		}
+	}
+}
+
+func TestFindRefusesANameReadAsAFlag(t *testing.T) {
+	// One ref in the repository, so a lookup listing them all passes it off as the
+	// name given, and "-a", git's flag for all of them, names no branch here. A clone
+	// would hide it behind several lines of remote-tracking refs.
+	repo := testutil.NewRepo(t)
+	if refs := testutil.Git(t, repo, "for-each-ref", "--format=%(refname)"); refs != "refs/heads/main" {
+		t.Fatalf("the fixture holds %q, want the single ref this case needs", refs)
+	}
+
+	if _, err := Find(open(t, repo), "-a"); err == nil {
+		t.Error("a name read as a flag found a worktree")
+	}
 }

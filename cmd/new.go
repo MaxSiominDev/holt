@@ -15,7 +15,7 @@ func newNewCommand() *cobra.Command {
 			"branch it had open and does not have to be clean.\n\n" +
 			"What the branch is made from depends on what already exists:\n" +
 			"  a local branch of that name    it is checked out as it stands, no network\n" +
-			"  a known origin/<branch>        the branch is fetched and tracked, not shadowed\n" +
+			"  a branch origin has            it is fetched and tracked, not shadowed\n" +
 			"  neither                        the default branch is fetched and branched off\n\n" +
 			"Prints the new directory, for the shell function to enter.",
 		Args:              cobra.ExactArgs(1),

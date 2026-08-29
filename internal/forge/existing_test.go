@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 var testRemote = remoteRepo{host: "github.com", path: "MaxSiominDev/holt"}
@@ -151,6 +152,18 @@ func TestExistingRequestURLGitLabArgs(t *testing.T) {
 	}
 }
 
+func TestExistingRequestURLTakesTheFirstOfSeveral(t *testing.T) {
+	// GitLab allows several open requests from one branch, and glab prints one
+	// address per line, which handed on whole is no address at all.
+	stubGlab(t, `printf '%s\n%s\n' https://x/y/-/merge_requests/1 https://x/y/-/merge_requests/2`, 0)
+
+	got := existingRequestURL(testGitLabRemote, gitLab, "feature", &strings.Builder{})
+
+	if want := "https://x/y/-/merge_requests/1"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestExistingRequestURLNotAnAddress(t *testing.T) {
 	tests := []struct {
 		name string
@@ -160,7 +173,10 @@ func TestExistingRequestURLNotAnAddress(t *testing.T) {
 		{name: "gh printed a usage error to stdout", kind: gitHub, body: `echo "unknown flag: --head"`},
 		{name: "glab printed a table instead of json", kind: gitLab, body: `echo "12  PROJ-1-fix  open"`},
 		{name: "glab printed the json rather than the address", kind: gitLab, body: `echo '[{"web_url":"https://x/y/-/merge_requests/1"}]'`},
-		{name: "the address is not one a browser takes", kind: gitHub, body: `echo "file:///etc/passwd"`},
+		{name: "the address is not https", kind: gitHub, body: `echo "file:///etc/passwd"`},
+		// A self-hosted forge served over plain http. holt hands what it finds
+		// to a browser, so the scheme has to be the one it asked for.
+		{name: "the address is plain http", kind: gitLab, body: `echo "http://gitlab.internal/g/p/-/merge_requests/12"`},
 	}
 
 	for _, test := range tests {
@@ -174,6 +190,28 @@ func TestExistingRequestURLNotAnAddress(t *testing.T) {
 				t.Fatalf("got %q, want it refused", got)
 			}
 		})
+	}
+}
+
+func TestExistingRequestURLHangs(t *testing.T) {
+	// Long enough that a test which does wait would time out rather than pass.
+	stubGh(t, "sleep 30", 0)
+	previous := lookupTimeout
+	lookupTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { lookupTimeout = previous })
+
+	var notes strings.Builder
+	start := time.Now()
+	got := existingRequestURL(testRemote, gitHub, "feature", &notes)
+
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("waited %s, want the lookup given up on", elapsed)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want nothing", got)
+	}
+	if !strings.Contains(notes.String(), "did not answer") {
+		t.Errorf("notes are %q, want the timeout named", notes.String())
 	}
 }
 
@@ -200,4 +238,43 @@ func stubCommands(t *testing.T, body string, status int, names ...string) {
 		}
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestExistingRequestURLSilentFailure(t *testing.T) {
+	// A tool that fails without a word on stderr. Left as it was, the note
+	// ended on its colon and named no cause at all.
+	stubGh(t, "", 3)
+
+	var notes strings.Builder
+	existingRequestURL(testRemote, gitHub, "feature", &notes)
+
+	if strings.HasSuffix(strings.TrimRight(notes.String(), "\n"), ": ") {
+		t.Fatalf("notes are %q, which trails off", notes.String())
+	}
+	if !strings.Contains(notes.String(), "3") {
+		t.Errorf("notes are %q, want the exit status gh went out with", notes.String())
+	}
+}
+
+func TestExistingRequestURLUnrunnableTool(t *testing.T) {
+	// On PATH and executable but unstartable, where Go says "no such file or
+	// directory" about a file holt just found and names its whole path.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ghCommand), []byte("#!/nonexistent/interpreter\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var notes strings.Builder
+	existingRequestURL(testRemote, gitHub, "feature", &notes)
+
+	if !strings.Contains(notes.String(), "holt could not run it") {
+		t.Fatalf("notes are %q, want holt's own words for a tool it could not start", notes.String())
+	}
+	if strings.Contains(notes.String(), "fork/exec") {
+		t.Fatalf("notes are %q, which hands the user Go's own wording", notes.String())
+	}
+	if strings.Contains(notes.String(), dir) {
+		t.Errorf("notes are %q, which spells out where the binary lives", notes.String())
+	}
 }

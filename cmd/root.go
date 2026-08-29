@@ -35,14 +35,15 @@ func newRootCommand(version string) *cobra.Command {
 			"CLAUDE.local.md and nothing says so. Name those files once and every\n" +
 			"worktree gets them, later ones included.\n" +
 			"\n" +
-			"Once, in your shell config: eval \"$(holt shell-init zsh)\". That is what\n" +
-			"lets cd, home and new actually move you. \"holt doctor\" says what is missing.",
+			"Once, in your shell config: eval \"$(holt shell-init zsh)\", or bash. That is\n" +
+			"what lets cd, home and new actually move you. \"holt doctor\" says what is\n" +
+			"missing.",
 		Example: "  holt new PROJ-1234-fix    branch off the fresh default branch and go there\n" +
 			"  holt ls                   what exists, how far each has drifted, which hold work\n" +
 			"  holt cd <TAB>             go to another worktree, completing the branch name\n" +
 			"  holt rebase               replant this branch on the default branch\n" +
 			"  holt push -f              publish it without overwriting anyone\n" +
-			"  holt open                 raise the merge request\n" +
+			"  holt open                 raise the request for review\n" +
 			"  holt home                 back to the main checkout\n" +
 			"  holt rm PROJ-1234-fix     take the worktree down once it is merged",
 		Version: version,
@@ -95,7 +96,13 @@ func plural(count int, noun string) string {
 	return fmt.Sprintf("%d %ss", count, noun)
 }
 
-// Keeps a message readable in a repository that holds a hundred of them.
+// oneLine flattens an error built from several, so a report of one line per
+// worktree stays one line per worktree.
+func oneLine(err error) string {
+	return strings.ReplaceAll(err.Error(), "\n", "; ")
+}
+
+// A listing stops being readable long before it stops being complete.
 func listSome(values []string, limit int) string {
 	if len(values) <= limit {
 		return strings.Join(values, ", ")

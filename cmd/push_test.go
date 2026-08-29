@@ -27,7 +27,7 @@ func TestPushKeepsStdoutClean(t *testing.T) {
 	}
 }
 
-func TestPushWithoutForce(t *testing.T) {
+func TestPushDefaultsToNoForce(t *testing.T) {
 	clone, _ := testutil.NewPushableClone(t)
 	testutil.Git(t, clone, "switch", "--quiet", "--create", "feature")
 	testutil.CommitTo(t, clone, "work.txt", "my work\n")

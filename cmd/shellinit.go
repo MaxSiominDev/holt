@@ -16,8 +16,8 @@ func newShellInitCommand() *cobra.Command {
 		Short:   "Print the shell function that lets holt change directory",
 		GroupID: groupSetup,
 		Long: "A program cannot change the working directory of the shell that started it,\n" +
-			"so holt cd and holt home only print the directory they resolved. This\n" +
-			"function calls the binary and performs the cd in your own shell.\n\n" +
+			"so holt new, holt cd and holt home only print the directory they resolved.\n" +
+			"This function calls the binary and performs the cd in your own shell.\n\n" +
 			"Add it to your shell startup file:\n\n" +
 			`    eval "$(holt shell-init zsh)"` + "\n\n" +
 			"or let holt add that line for you:\n\n" +

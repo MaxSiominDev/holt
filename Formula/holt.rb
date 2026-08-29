@@ -9,7 +9,8 @@ class Holt < Formula
   head "https://github.com/MaxSiominDev/holt.git", branch: "main"
 
   depends_on "go" => :build
-  # "holt ls" needs the ahead-behind atom from git 2.41; Xcode ships an older git.
+  # "holt ls" needs the ahead-behind atom from git 2.41, and Apple's git is not
+  # something to count on tracking it.
   depends_on "git"
 
   def install
@@ -24,10 +25,10 @@ class Holt < Formula
 
         holt shell-init zsh --install     # or bash
 
-      That writes one guarded line into ~/.zshrc, inside a block it owns, and
-      leaves the rest alone. It stores the line rather than the function, so
-      "brew upgrade holt" upgrades the function too, and the line does nothing
-      once holt is uninstalled.
+      That writes a five-line block into ~/.zshrc and leaves the rest alone.
+      It stores the eval line rather than the function, so "brew upgrade holt"
+      upgrades the function too, and the line does nothing once holt is
+      uninstalled.
 
       "holt doctor" reports what is set up in a repository and what is not.
     EOS
@@ -35,8 +36,8 @@ class Holt < Formula
 
   test do
     assert_match "holt #{version}", shell_output("#{bin}/holt --version")
-    # holt's own wording rather than git's, so the check proves holt looked.
-    assert_match "git repository", shell_output("#{bin}/holt ls 2>&1", 1)
+    # holt's own wording, which git's "not a git repository" does not contain.
+    assert_match "holt has to run inside", shell_output("#{bin}/holt ls 2>&1", 1)
     assert_match "holt()", shell_output("#{bin}/holt shell-init zsh")
   end
 end

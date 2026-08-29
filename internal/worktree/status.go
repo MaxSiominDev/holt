@@ -11,10 +11,10 @@ import (
 	"github.com/MaxSiominDev/holt/internal/git"
 )
 
-// Measured over 98 worktrees, warm cache, runs interleaved: 2 workers 1.92s,
-// 4 workers 1.20s, 8 workers 1.29s, 16 workers 1.58s. Past four, the walks for
-// untracked files take the disk from each other. Re-measure before raising it.
-const statusWorkers = 4
+// How many "git status" run at once. Over 98 worktrees, warm cache, interleaved: 2 at
+// 1.92s, 4 at 1.20s, 8 at 1.29s, 16 at 1.58s. Past four the walks for untracked files
+// take the disk from each other, so re-measure before raising it.
+const statusAtOnce = 4
 
 // State is what stands out about a worktree, if anything.
 type State string
@@ -50,13 +50,12 @@ func Statuses(repo *git.Repo) ([]Status, error) {
 	if err := compareToDefault(repo, statuses); err != nil {
 		return nil, err
 	}
-	markState(repo, statuses)
+	MarkState(repo, statuses)
 	return statuses, nil
 }
 
-// SupportsDrift looks for the ahead-behind format atom, which arrived in 2.41.
-// Only "unknown field name" counts: an unborn HEAD fails here too, and
-// upgrading git would not help that.
+// SupportsDrift looks for the ahead-behind atom, which arrived in 2.41. Only
+// "unknown field name" counts: an unborn HEAD fails here too, and no upgrade helps.
 func SupportsDrift(repo *git.Repo) bool {
 	_, err := repo.Output("for-each-ref", "--count=1", "--format=%(ahead-behind:HEAD)", "refs/heads/")
 
@@ -64,7 +63,7 @@ func SupportsDrift(repo *git.Repo) bool {
 	return !errors.As(err, &exit) || !strings.Contains(exit.Stderr, "unknown field name")
 }
 
-// One git call for every branch. A failure empties the two columns rather than
+// One git call for all the branches. A failure empties the two columns rather than
 // refusing to list anything.
 func compareToDefault(repo *git.Repo, statuses []Status) error {
 	branch, err := DefaultBranch(repo)
@@ -75,11 +74,9 @@ func compareToDefault(repo *git.Repo, statuses []Status) error {
 		return err
 	}
 
-	// for-each-ref fails outright when the ref it compares against is missing.
+	// DefaultBranch only answers with a branch it has already verified, and
+	// for-each-ref below returns nothing useful if the ref went in between.
 	ref := "refs/remotes/origin/" + branch
-	if _, err := repo.Output("rev-parse", "--verify", "--quiet", ref); err != nil {
-		return nil
-	}
 
 	// lstrip=2, not :short, which answers "heads/x" when a tag shares the name.
 	out, err := repo.Output("for-each-ref", "--format=%(refname:lstrip=2)\t%(ahead-behind:"+ref+")", "refs/heads/")
@@ -121,11 +118,15 @@ func parseAheadBehind(out string) map[string]drift {
 	return counts
 }
 
-// A worktree git cannot read is labelled, so one damaged directory does not
-// blank the listing.
-func markState(repo *git.Repo, statuses []Status) {
-	limit := make(chan struct{}, statusWorkers)
+// MarkState labels each worktree with the state its directory is in, so one damaged
+// directory does not blank the listing. Exported for doctor, which wants no drift.
+func MarkState(repo *git.Repo, statuses []Status) {
+	limit := make(chan struct{}, statusAtOnce)
 	var wait sync.WaitGroup
+
+	// Asked once for the whole listing rather than once per worktree: it is the
+	// side of the comparison that is the same every time.
+	here, hereErr := commonDirInfo(repo)
 
 	for index := range statuses {
 		status := &statuses[index]
@@ -139,16 +140,22 @@ func markState(repo *git.Repo, statuses []Status) {
 			}
 			continue
 		}
-
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
 			limit <- struct{}{}
 			defer func() { <-limit }()
 
-			// Untracked counts and ignored does not, matching what "git worktree
-			// remove" refuses over. --no-optional-locks keeps holt from taking
-			// index.lock off an IDE doing the same in the background.
+			// Asked of git, not of the .git entry alone: without one discovery walks
+			// up, and a reused path answers for its own project, so the status below
+			// would be about a repository the user never asked about.
+			if hereErr != nil || !sameRepositoryAs(repo, here, status.Path) {
+				status.State = StateBroken
+				return
+			}
+
+			// Untracked counts and ignored does not, as "git worktree remove" has it,
+			// and --no-optional-locks leaves index.lock to whoever else wants it.
 			out, err := repo.At(status.Path).Output(
 				"--no-optional-locks", "status", "--porcelain", "--untracked-files=normal")
 			switch {

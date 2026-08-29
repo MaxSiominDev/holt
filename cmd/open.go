@@ -14,15 +14,17 @@ func newOpenCommand() *cobra.Command {
 	var printOnly bool
 	command := &cobra.Command{
 		Use:     "open",
-		Short:   "Open the page for raising a merge request",
+		Short:   "Open the request for this branch, or the page for raising one",
 		GroupID: groupBranch,
-		Long: "gh on GitHub, glab on GitLab, is asked whether a request is already open\n" +
-			"from this branch, and that one is opened. Either tool holds the\n" +
+		Long: "Asks the forge's own tool whether a request is already open from this\n" +
+			"branch, and opens that one: gh on GitHub, glab on GitLab. Either holds the\n" +
 			"authentication, so holt needs no token of its own.\n\n" +
 			"Without the tool, or without an answer from it, the page for raising a\n" +
 			"request is opened instead. That page needs nothing installed.\n\n" +
 			"The forge is recognised by its host name. Set " + forge.KindKey + " to github or\n" +
-			"gitlab for a host that is named after neither, or after the wrong one.",
+			"gitlab for a host that is named after neither, or after the wrong one, and\n" +
+			forge.HostKey + " where the remote carries a name only ssh understands, such as\n" +
+			"a Host alias from ~/.ssh/config.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			repo, err := openRepo()
@@ -56,7 +58,7 @@ func changeRequestURL(repo *git.Repo, notes io.Writer) (string, error) {
 		return "", err
 	}
 	if branch == defaultBranch {
-		return "", fmt.Errorf("this worktree is on %s, which is what a merge request would be raised against", defaultBranch)
+		return "", fmt.Errorf("this worktree is on %s, which is what a request would be raised against", defaultBranch)
 	}
 	return forge.ChangeRequestURL(repo, branch, defaultBranch, notes)
 }

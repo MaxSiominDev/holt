@@ -11,8 +11,8 @@ func newRebaseCommand() *cobra.Command {
 		Short:   "Rebase this branch onto the default branch",
 		GroupID: groupBranch,
 		Long: "Refuses unless the rebase is plainly safe: a branch of its own, no\n" +
-			"uncommitted changes, and no rebase, merge, cherry-pick or revert already\n" +
-			"under way.\n\n" +
+			"uncommitted changes, and nothing of git's own left half-finished in the\n" +
+			"worktree, a rebase, merge, cherry-pick, revert, am or bisect among them.\n\n" +
 			"On a conflict it stops where git stopped and says how to continue or abort.\n" +
 			"It never pushes: force-pushing rewritten history is yours to decide.",
 		Args: cobra.NoArgs,

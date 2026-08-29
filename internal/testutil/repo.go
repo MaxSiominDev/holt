@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/MaxSiominDev/holt/internal/git"
 )
 
 // NewRepo has a single commit on branch main.
@@ -113,8 +115,7 @@ func AddWorktree(t *testing.T, repo, branch string) string {
 }
 
 // What a fetch would leave behind, built directly so the fixture stays offline.
-// The remote is configured too, since a real repository cannot hold
-// refs/remotes/origin/* without one and holt tells the two cases apart.
+// The remote is configured too, since no real repository lacks one.
 func SetOriginHead(t *testing.T, repo, branch string) {
 	t.Helper()
 	if _, err := exec.Command("git", "-C", repo, "remote", "get-url", "origin").Output(); err != nil {
@@ -151,6 +152,16 @@ func Git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimRight(string(out), "\r\n")
 }
 
+// GitStopping runs a git command meant to stop part way, whose non-zero status
+// Git would otherwise take for a broken fixture.
+func GitStopping(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("git %v in %s ran to the end, so the fixture no longer stops part way", args, dir)
+	}
+}
+
 // WriteFile creates parent directories as needed.
 func WriteFile(t *testing.T, path, content string) {
 	t.Helper()
@@ -168,11 +179,24 @@ func identify(t *testing.T, dir string) {
 	Git(t, dir, "config", "user.name", "holt")
 }
 
-// The developer's git configuration is detached so core.hooksPath cannot leak in.
+// Root is a detached repository root for a shape the constructors here do not
+// cover; without it the developer's own git configuration drives the fixture.
+func Root(t *testing.T) string {
+	t.Helper()
+	return newRoot(t)
+}
+
+// The developer's configuration is detached so core.hooksPath cannot leak in, and
+// so are the variables pointing git elsewhere, GIT_DIR under "rebase --exec" among
+// them, which a fixture's "git init" would follow into holt's own repository.
 func newRoot(t *testing.T) string {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, name := range git.RedirectingVars() {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
 
 	// macOS hides temporary directories behind /var -> /private/var, and git
 	// reports the resolved path.

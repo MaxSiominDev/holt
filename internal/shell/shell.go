@@ -35,8 +35,8 @@ holt() {
     new|cd|home)
       local target argument
 
-      # Help is text for a human, not a path to enter. Each argument is
-      # examined on its own so that a non-default IFS cannot hide the flag.
+      # --help prints text for a human, so there is no path to cd into. Each
+      # argument is examined alone so a non-default IFS cannot hide the flag.
       for argument in "$@"; do
         case "$argument" in
           -h|--help) command holt "$@"; return ;;
@@ -64,7 +64,7 @@ func ConfigFile(shell string) (string, error) {
 
 	switch shell {
 	case "zsh":
-		// zsh reads $ZDOTDIR/.zshrc when that is set, and only then ~/.zshrc.
+		// With ZDOTDIR set, zsh reads $ZDOTDIR/.zshrc and never ~/.zshrc.
 		if dir := os.Getenv("ZDOTDIR"); dir != "" {
 			return filepath.Join(dir, ".zshrc"), nil
 		}
@@ -79,9 +79,8 @@ func ConfigFile(shell string) (string, error) {
 // Install reports whether the file changed. The block goes at the end, since it
 // needs holt on PATH and a startup file sets that up above.
 func Install(shell, path string) (bool, error) {
-	// The eval line rather than a copy of the function, so "brew upgrade holt"
-	// upgrades the function too. The guard is for the day holt is uninstalled,
-	// when every new shell would otherwise say "command not found: holt".
+	// The eval line rather than a copy, so "brew upgrade holt" upgrades the function;
+	// the guard is for the day holt is uninstalled and every new shell would complain.
 	return textblock.ReplaceInFile(path, blockBegin, blockEnd, []string{
 		"if command -v holt >/dev/null 2>&1; then",
 		fmt.Sprintf(`  eval "$(holt shell-init %s)"`, shell),
@@ -92,4 +91,16 @@ func Install(shell, path string) (bool, error) {
 // Installed says the block is in the file, not that the file was read.
 func Installed(path string) (bool, error) {
 	return textblock.PresentInFile(path, blockBegin)
+}
+
+// Quote wraps a value so a command holt prints runs as printed: single quotes take
+// everything literally, save a quote of their own, closed, escaped and reopened.
+func Quote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// Named puts a command line in the double quotes holt's messages use. Not %q,
+// which escapes Quote's backslashes into a line the shell reads differently.
+func Named(command string) string {
+	return `"` + command + `"`
 }

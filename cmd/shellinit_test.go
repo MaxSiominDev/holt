@@ -12,8 +12,6 @@ import (
 	"github.com/MaxSiominDev/holt/internal/shell"
 )
 
-// The one part of holt that is never compiled, so it is run for real here.
-
 func TestShellFunctionEntersPath(t *testing.T) {
 	forEachShell(t, func(t *testing.T, name string) {
 		destination, stubDir := stubHolt(t)
@@ -22,6 +20,50 @@ func TestShellFunctionEntersPath(t *testing.T) {
 
 		if got := lastLine(out); got != destination {
 			t.Fatalf("the shell ended up in %q, want %q", got, destination)
+		}
+	})
+}
+
+func TestShellFunctionEntersPathForEveryCommandThatPrintsOne(t *testing.T) {
+	// "new" and "home" print a path for the wrapper too, and dropping either from
+	// the case list leaves them printing it and going nowhere.
+	for _, command := range []string{"new", "home"} {
+		t.Run(command, func(t *testing.T) {
+			forEachShell(t, func(t *testing.T, name string) {
+				destination, stubDir := stubHolt(t)
+
+				out := runShell(t, name, stubDir, shell.Snippet+"\nholt "+command+" whatever\npwd\n")
+
+				if got := lastLine(out); got != destination {
+					t.Fatalf("the shell ended up in %q, want %q", got, destination)
+				}
+			})
+		})
+	}
+}
+
+func TestShellFunctionStaysPutWhenNoPathIsPrinted(t *testing.T) {
+	forEachShell(t, func(t *testing.T, name string) {
+		binDir := t.TempDir()
+		// A holt that succeeds and prints nothing: no command does today, but the
+		// function outlives the binary it calls, and an empty argument to cd is a
+		// no-op in zsh and an error in bash 5.
+		stub := "#!/bin/sh\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(binDir, "holt"), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		start := resolvedTempDir(t)
+
+		// The status of the function and whatever it said: staying put is not enough,
+		// since a failed cd also leaves the shell where it was.
+		script := shell.Snippet + "\ncd " + start + "\nholt cd whatever 2>&1\necho status=$?\npwd\n"
+		out := runShell(t, name, binDir, script)
+
+		if !strings.Contains(out, "status=0") {
+			t.Errorf("the function failed over a path it was never given:\n%s", out)
+		}
+		if got := lastLine(out); got != start {
+			t.Fatalf("the shell moved to %q, want to stay in %q", got, start)
 		}
 	})
 }
@@ -120,6 +162,8 @@ func TestShellInitInstall(t *testing.T) {
 func TestShellInitPrintsOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// With ZDOTDIR set the write would land somewhere this test never looks.
+	t.Setenv("ZDOTDIR", "")
 
 	runHolt(t, "shell-init", "zsh")
 
@@ -129,11 +173,7 @@ func TestShellInitPrintsOnly(t *testing.T) {
 }
 
 func TestShellInitUnsupportedShell(t *testing.T) {
-	root := newRootCommand("test")
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"shell-init", "fish"})
+	root, _, _ := holtCommand(t, "shell-init", "fish")
 
 	err := root.Execute()
 

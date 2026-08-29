@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/MaxSiominDev/holt/internal/git"
@@ -15,7 +16,7 @@ const branchesInErrorMessage = 10
 
 func newCdCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:     "cd <branch>",
+		Use:     "cd [<branch>]",
 		Short:   "Go to the worktree for a branch",
 		GroupID: groupWorktrees,
 		Long: "Prints the directory and nothing else, for the shell function to enter.\n" +
@@ -35,9 +36,12 @@ func newCdCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// git keeps listing a worktree after its directory is deleted.
-			if _, err := os.Stat(found.Path); err != nil {
+			// git lists a worktree after its directory is deleted; an unreadable one
+			// gets its own words, as "holt ls" and doctor also tell the two apart.
+			if _, err := os.Stat(found.Path); errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("%s is registered at %s, but that directory is gone", args[0], found.Path)
+			} else if err != nil {
+				return fmt.Errorf("%s is registered at %s, which holt cannot read: %w", args[0], found.Path, err)
 			}
 			return printPath(cmd, found.Path)
 		},
@@ -50,6 +54,15 @@ func noBranchNamed(repo *git.Repo) error {
 		return err
 	}
 	if len(branches) == 0 {
+		// A --detach worktree carries no branch, and holt reaches them by name;
+		// saying there are none would contradict the "holt ls" just read.
+		worktrees, err := worktree.List(repo)
+		if err != nil {
+			return err
+		}
+		if len(worktrees) > 1 {
+			return errors.New("no linked worktree here is on a branch, and that is the name holt goes by")
+		}
 		return errors.New("this repository has no linked worktrees yet")
 	}
 

@@ -182,3 +182,23 @@ func TestNewChangeRequestURL(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectKindIgnoresCase(t *testing.T) {
+	// Spelled out rather than lower-cased and matched here, which is the rule
+	// under test and would agree with itself however wrong it was.
+	for host, want := range map[string]forgeKind{
+		"GitHub.COM":         gitHub,
+		"github.com":         gitHub,
+		"GITLAB.example.com": gitLab,
+		"gitlab.example.com": gitLab,
+	} {
+		kind, recognised := detectKind(host)
+		if !recognised {
+			t.Errorf("%s was not recognised", host)
+			continue
+		}
+		if kind != want {
+			t.Errorf("%s was read as %s, want %s", host, kind, want)
+		}
+	}
+}

@@ -5,12 +5,35 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/MaxSiominDev/holt/internal/git"
 	"github.com/MaxSiominDev/holt/internal/testutil"
 )
+
+func TestCurrentBranchNamesTheOperationTheWorktreeIsStoppedIn(t *testing.T) {
+	clone, origin := testutil.NewClonedRepo(t)
+	feature := branchWorktree(t, clone, "feature", "shared.txt", "the branch's version\n")
+	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
+	// The state "holt rebase" leaves when it cannot finish, from a real conflict,
+	// since git detaches HEAD and a faked marker would not.
+	if err := Rebase(open(t, feature), io.Discard); !errors.Is(err, ErrRebaseStopped) {
+		t.Fatalf("the fixture produced %v, want a stopped rebase", err)
+	}
+
+	_, err := CurrentBranch(open(t, feature))
+
+	if err == nil {
+		t.Fatal("a worktree with HEAD parked on a commit answered with a branch")
+	}
+	// "holt ls" shows the branch and "holt rm" names the rebase, so "no branch
+	// checked out" would send the user after what is right there.
+	if !strings.Contains(err.Error(), "rebase") {
+		t.Errorf("error %q says nothing about the rebase the worktree is stopped in", err)
+	}
+}
 
 func TestRebaseOntoFetchedDefault(t *testing.T) {
 	clone, origin := testutil.NewClonedRepo(t)
@@ -90,6 +113,29 @@ func TestRebaseAllowsUntrackedFiles(t *testing.T) {
 	}
 }
 
+func TestRebaseDuringBisect(t *testing.T) {
+	clone, _ := testutil.NewClonedRepo(t)
+	feature := branchWorktree(t, clone, "feature", "work.txt", "my work\n")
+	// A bisect leaves a clean tree at every step, so nothing else stops the
+	// rebase: this guard is what does.
+	testutil.Git(t, feature, "bisect", "start")
+	testutil.Git(t, feature, "bisect", "bad")
+
+	err := Rebase(open(t, feature), io.Discard)
+
+	if err == nil {
+		t.Fatal("a rebase was started in a bisecting worktree")
+	}
+	// A bisect has no --abort and no --continue, so the wording the other
+	// operations get sends the user to commands that do not exist.
+	if !strings.Contains(err.Error(), "git bisect reset") {
+		t.Errorf("error %q does not name the command that ends a bisect", err)
+	}
+	if strings.Contains(err.Error(), "abort") {
+		t.Errorf("error %q offers an abort that bisect does not have", err)
+	}
+}
+
 func TestRebaseDuringRebase(t *testing.T) {
 	clone, origin := testutil.NewClonedRepo(t)
 	feature := branchWorktree(t, clone, "feature", "shared.txt", "the branch's version\n")
@@ -104,7 +150,7 @@ func TestRebaseDuringRebase(t *testing.T) {
 	if err == nil {
 		t.Fatal("a second rebase was started on top of an unfinished one")
 	}
-	if !strings.Contains(err.Error(), "already in progress") {
+	if !strings.Contains(err.Error(), "unfinished rebase") {
 		t.Errorf("error %q does not name the unfinished operation", err)
 	}
 }
@@ -121,7 +167,7 @@ func TestRebaseDuringMerge(t *testing.T) {
 
 	err := Rebase(open(t, feature), io.Discard)
 
-	if err == nil || !strings.Contains(err.Error(), "merge is already in progress") {
+	if err == nil || !strings.Contains(err.Error(), "unfinished merge") {
 		t.Fatalf("got %v, want the unfinished merge named", err)
 	}
 }
@@ -185,7 +231,7 @@ func TestRebaseConflict(t *testing.T) {
 		t.Errorf("error %q does not say how to get out of it", err)
 	}
 	// The conflict is the user's to resolve, so holt must not clean up after git.
-	if operation, _ := operationInProgress(open(t, feature)); operation != "rebase" {
+	if operation, _ := OperationInProgress(open(t, feature)); operation != "rebase" {
 		t.Errorf("got operation %q, want the stopped rebase left in place", operation)
 	}
 }
@@ -196,4 +242,96 @@ func branchWorktree(t *testing.T, clone, branch, file, content string) string {
 	path := testutil.AddWorktree(t, clone, branch)
 	testutil.CommitTo(t, path, file, content)
 	return path
+}
+
+func TestCurrentBranchWithSameNamedTag(t *testing.T) {
+	repo := testutil.NewRepo(t)
+	testutil.Git(t, repo, "switch", "--quiet", "--create", "feature")
+	// Cutting a release tag named after its branch. git shortens a ref by
+	// resolving tags first, so --short would answer heads/feature here.
+	testutil.Git(t, repo, "tag", "feature")
+
+	branch, err := CurrentBranch(open(t, repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if branch != "feature" {
+		t.Fatalf("got %q, want %q", branch, "feature")
+	}
+}
+
+func TestRebaseOntoShadowedRemoteRef(t *testing.T) {
+	clone, origin := testutil.NewClonedRepo(t)
+	worktree := testutil.AddWorktree(t, clone, "feature")
+	testutil.CommitTo(t, worktree, "work.txt", "my work\n")
+	// A commit on the default branch that the rebase has to bring in.
+	landed := testutil.CommitTo(t, origin, "theirs.txt", "landed on main\n")
+	// A local branch of this name outranks the remote-tracking ref, and git rebases
+	// onto it, warns among its progress and exits zero.
+	testutil.Git(t, worktree, "branch", "origin/main", "HEAD")
+
+	if err := Rebase(open(t, worktree), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	history := testutil.Git(t, worktree, "log", "--format=%H")
+	if !strings.Contains(history, landed) {
+		t.Fatal("the default branch's commit is not in the branch's history, so nothing was replanted")
+	}
+}
+
+func TestListNamesBranchOfStoppedRebase(t *testing.T) {
+	clone, origin := testutil.NewClonedRepo(t)
+	worktree := testutil.AddWorktree(t, clone, "feature")
+	testutil.CommitTo(t, worktree, "shared.txt", "the branch's version\n")
+	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
+
+	if err := Rebase(open(t, worktree), io.Discard); !errors.Is(err, ErrRebaseStopped) {
+		t.Fatalf("the fixture no longer stops the rebase: %v", err)
+	}
+
+	// git parks HEAD on a commit while a rebase is stopped, and without the branch
+	// nothing reaches the worktree holt's own rebase left there.
+	if _, err := Find(open(t, clone), "feature"); err != nil {
+		t.Fatalf("the worktree holt stopped a rebase in is unreachable: %v", err)
+	}
+	branches, err := LinkedBranches(open(t, clone), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(branches, "feature") {
+		t.Errorf("completion offers %v, want the branch still listed", branches)
+	}
+}
+
+func TestListRebaseStartedFromDetachedHead(t *testing.T) {
+	clone, origin := testutil.NewClonedRepo(t)
+	worktree := testutil.AddWorktree(t, clone, "feature")
+	testutil.CommitTo(t, worktree, "shared.txt", "the branch's version\n")
+	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
+	testutil.Git(t, clone, "fetch", "--quiet", "origin")
+	// Detached on purpose, the way anyone looking at an older commit is. holt
+	// refuses to rebase from here, so this is git's own doing.
+	testutil.Git(t, worktree, "checkout", "--quiet", "--detach")
+	if _, err := runGit(worktree, "rebase", "refs/remotes/origin/main"); err == nil {
+		t.Fatal("the fixture no longer stops the rebase")
+	}
+
+	worktrees, err := List(open(t, clone))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := worktrees[1]
+
+	// git writes the words "detached HEAD" where a ref would go. Taken for a
+	// name, it reaches --porcelain and completion as a branch git forbids.
+	if stopped.Branch != "" {
+		t.Errorf("holt calls the branch %q, and no branch may be named that", stopped.Branch)
+	}
+	// What "holt ls" would need to tell this from a plain detached HEAD; nothing
+	// reads it yet, removal being decided by asking git for the operation.
+	if !stopped.Rebasing {
+		t.Error("the worktree is not marked as mid-rebase")
+	}
 }

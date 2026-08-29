@@ -11,8 +11,8 @@ func newPushCommand() *cobra.Command {
 		Use:     "push",
 		Short:   "Push this branch to origin",
 		GroupID: groupBranch,
-		Long: "On branch feature this runs \"git push origin feature\". The upstream is left\n" +
-			"alone.\n\n" +
+		Long: "On branch feature this pushes refs/heads/feature to origin, spelled out so\n" +
+			"that a tag of the same name cannot go instead. The upstream is left alone.\n\n" +
 			"--force is what a rebase leaves you needing. It refuses if the remote branch\n" +
 			"has moved since your last fetch, and refuses again if your branch does not\n" +
 			"contain what that fetch brought in.",
