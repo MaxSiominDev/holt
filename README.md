@@ -24,7 +24,7 @@ Then open a new shell.
 | `holt main` | in the main checkout, switch to the default branch whatever it is called |
 | `holt ls` | every worktree, how far it has drifted, whether it holds work |
 | `holt rm <branch>` | remove one worktree, and its branch if the default branch has it |
-| `holt rebase` | rebase this branch onto a freshly fetched default branch |
+| `holt rebase [--no-abort]` | rebase this branch onto a freshly fetched default branch, undoing it on a conflict |
 | `holt push [-f]` | push this branch to origin |
 | `holt pull` | pull this branch from origin |
 | `holt open` | open the request for this branch, or the page for raising one |

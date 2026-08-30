@@ -34,3 +34,38 @@ func TestRebaseUncommitted(t *testing.T) {
 		t.Errorf("error %q does not say what is wrong", err)
 	}
 }
+
+func TestRebaseConflictPutsTheBranchBack(t *testing.T) {
+	clone, origin := testutil.NewClonedRepo(t)
+	feature := testutil.AddWorktree(t, clone, "feature")
+	testutil.CommitTo(t, feature, "shared.txt", "the branch's version\n")
+
+	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
+	t.Chdir(feature)
+
+	err := runHoltExpectingFailure(t, "rebase")
+
+	if !strings.Contains(err.Error(), "back where it was") {
+		t.Errorf("error %q does not say what became of the branch", err)
+	}
+	if status := testutil.Git(t, feature, "status", "--porcelain"); status != "" {
+		t.Errorf("the worktree is left holding %q, want the conflict undone", status)
+	}
+}
+
+func TestRebaseConflictNoAbort(t *testing.T) {
+	clone, origin := testutil.NewClonedRepo(t)
+	feature := testutil.AddWorktree(t, clone, "feature")
+	testutil.CommitTo(t, feature, "shared.txt", "the branch's version\n")
+	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
+	t.Chdir(feature)
+
+	err := runHoltExpectingFailure(t, "rebase", "--no-abort")
+
+	if !strings.Contains(err.Error(), "git rebase --continue") {
+		t.Errorf("error %q does not say how to finish the rebase", err)
+	}
+	if status := testutil.Git(t, feature, "status", "--porcelain"); !strings.Contains(status, "shared.txt") {
+		t.Errorf("got %q, want the conflict left standing", status)
+	}
+}
