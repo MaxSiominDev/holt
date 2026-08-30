@@ -198,6 +198,19 @@ func newRoot(t *testing.T) string {
 		os.Unsetenv(name)
 	}
 
+	// The post-checkout hook runs whatever holt PATH offers and falls back to the
+	// binary that wrote it, which under "go test" is the test binary. A hook firing
+	// then runs the whole package again, and every one of those runs fires it again,
+	// so a stub answers to the name instead of the developer's installed holt.
+	binaries := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binaries, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binaries, "holt"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binaries+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	// macOS hides temporary directories behind /var -> /private/var, and git
 	// reports the resolved path.
 	root, err := filepath.EvalSymlinks(t.TempDir())

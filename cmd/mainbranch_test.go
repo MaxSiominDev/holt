@@ -38,5 +38,5 @@ func TestMainTakesNoArguments(t *testing.T) {
 	testutil.SetOriginHead(t, main, "main")
 	t.Chdir(main)
 
-	runHoltExpectingFailure(t, "main", "master")
+	_ = runHoltExpectingFailure(t, "main", "master")
 }

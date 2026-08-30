@@ -1,4 +1,4 @@
-# The installed copy lives in MaxSiominDev/homebrew-tap; this one is edited
+# The installed copy lives in MaxSiominDev/homebrew-holt; this one is edited
 # alongside the source so the two stay in sync.
 class Holt < Formula
   desc "Git worktree helper that mirrors personal files into every worktree"

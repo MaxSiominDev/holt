@@ -13,5 +13,5 @@ func names(info fs.FileInfo) uint64 {
 	if !ok {
 		return 1
 	}
-	return uint64(stat.Nlink)
+	return uint64(stat.Nlink) //nolint:unconvert
 }

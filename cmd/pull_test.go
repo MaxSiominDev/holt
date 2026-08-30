@@ -34,5 +34,5 @@ func TestPullTakesNoArguments(t *testing.T) {
 
 	// A branch name here would read as one to pull, which holt does not do: it
 	// pulls the branch this worktree is on and no other.
-	runHoltExpectingFailure(t, "pull", "feature")
+	_ = runHoltExpectingFailure(t, "pull", "feature")
 }

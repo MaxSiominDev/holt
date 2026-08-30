@@ -1,0 +1,21 @@
+version: "2"
+
+linters:
+  # On top of the default set: errcheck, govet, ineffassign, staticcheck, unused.
+  enable:
+    - errorlint
+    - misspell
+    - unconvert
+  settings:
+    misspell:
+      # The prose in this repository is British, so "colours" and "behaviour" stay.
+      locale: UK
+      # A bracket in a test path name reads as a typo for "etc".
+      ignore-rules:
+        - ect
+  exclusions:
+    presets:
+      # Deliberate ignores in Go's own idiom: fmt.Fprintf to a writer holt does not
+      # own, a Close after a failed write, a Remove of a temporary file already gone.
+      - std-error-handling
+      - common-false-positives

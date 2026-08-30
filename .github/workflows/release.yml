@@ -1,0 +1,116 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  TAP_REPOSITORY: MaxSiominDev/homebrew-holt
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - run: go test -count=1 ./...
+
+      - name: build the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          go build -ldflags "-s -w -X main.version=$TAG" -o build/holt .
+          version=$(./build/holt --version)
+          if [ "$version" != "holt $TAG" ]; then
+            echo "holt reports \"$version\", want \"holt $TAG\""
+            exit 1
+          fi
+
+      # What the formula installs is this tarball, which GitHub generates from the tag
+      # rather than storing, so the checksum can only be taken after tagging.
+      - name: checksum the source tarball
+        id: tarball
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          url="https://github.com/${{ github.repository }}/archive/refs/tags/$TAG.tar.gz"
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors -o source.tar.gz "$url"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(shasum -a 256 source.tar.gz | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      # On top of main, not of the tag: the commit has to go somewhere a later tag will
+      # be cut from, and the tag itself is not a branch.
+      - name: point the formula at the new tarball
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git fetch origin main
+          # ^{commit} because an annotated tag names a tag object, not the commit.
+          if ! git merge-base --is-ancestor "$TAG^{commit}" origin/main; then
+            echo "$TAG is not on main, and a commit made on top of main would then carry work the tag does not have"
+            exit 1
+          fi
+          git checkout -B release origin/main
+
+          sed -i '' \
+            -e 's|^  url ".*"$|  url "${{ steps.tarball.outputs.url }}"|' \
+            -e 's|^  sha256 ".*"$|  sha256 "${{ steps.tarball.outputs.sha256 }}"|' \
+            Formula/holt.rb
+          grep -q '${{ steps.tarball.outputs.sha256 }}' Formula/holt.rb || {
+            echo "the formula did not take the new checksum; its url and sha256 lines are not where sed looked"
+            exit 1
+          }
+
+      - name: commit the formula back to main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/holt.rb
+          if git diff --cached --quiet; then
+            echo "main already has this formula"
+            exit 0
+          fi
+          git commit -m "Point the formula at $TAG [skip ci]"
+          git push origin HEAD:main
+
+      # brew installs from the tap, not from this copy, so this is the step that makes the
+      # release reachable. A token, because GITHUB_TOKEN stops at this repository.
+      - name: publish the formula to the tap
+        env:
+          TAG: ${{ github.ref_name }}
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_TOKEN is not set: add a token with write access to $TAP_REPOSITORY"
+            exit 1
+          fi
+          git clone --depth 1 "https://x-access-token:$TAP_TOKEN@github.com/$TAP_REPOSITORY.git" tap
+          mkdir -p tap/Formula
+          cp Formula/holt.rb tap/Formula/holt.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/holt.rb
+          if git diff --cached --quiet; then
+            echo "the tap already has this formula"
+            exit 0
+          fi
+          git commit -m "holt $TAG"
+          git push
+
+      - name: draw up the release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$TAG" --title "$TAG" --generate-notes

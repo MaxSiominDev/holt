@@ -834,7 +834,7 @@ func TestSyncUnreadableWorktree(t *testing.T) {
 	if err := os.Chmod(unreadable, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(unreadable, 0o755) })
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
 
 	results, err := Sync(open(t, main), []string{"CLAUDE.local.md"})
 	if err != nil {

@@ -35,7 +35,7 @@ func TestStatusTakesNoFlagsOrArguments(t *testing.T) {
 	main := testutil.NewRepo(t)
 	t.Chdir(main)
 
-	runHoltExpectingFailure(t, "st", "-s")
-	runHoltExpectingFailure(t, "st", "--porcelain")
-	runHoltExpectingFailure(t, "st", "README.md")
+	_ = runHoltExpectingFailure(t, "st", "-s")
+	_ = runHoltExpectingFailure(t, "st", "--porcelain")
+	_ = runHoltExpectingFailure(t, "st", "README.md")
 }
