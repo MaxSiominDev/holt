@@ -8,6 +8,8 @@ thing done before that version is tagged.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-30
+
 ### Added
 
 - `holt new`, `holt cd`, `holt home` and `holt ls`: worktrees under
@@ -22,4 +24,5 @@ thing done before that version is tagged.
 - `holt shell-init`: the function `holt cd` and `holt new` need, written into `~/.zshrc` or
   `~/.bashrc` on request.
 
-[Unreleased]: https://github.com/MaxSiominDev/holt/commits/main
+[Unreleased]: https://github.com/MaxSiominDev/holt/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/MaxSiominDev/holt/releases/tag/v0.1.0
