@@ -211,6 +211,10 @@ func newRoot(t *testing.T) string {
 	}
 	t.Setenv("PATH", binaries+string(os.PathListSeparator)+os.Getenv("PATH"))
 
+	// holt keeps its own settings outside every repository, and the developer's
+	// real merge list would otherwise decide what these tests merge.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+
 	// macOS hides temporary directories behind /var -> /private/var, and git
 	// reports the resolved path.
 	root, err := filepath.EvalSymlinks(t.TempDir())

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/MaxSiominDev/holt/internal/config"
 	"github.com/MaxSiominDev/holt/internal/git"
 	"github.com/MaxSiominDev/holt/internal/mirror"
 	"github.com/MaxSiominDev/holt/internal/shell"
@@ -88,6 +89,7 @@ func runChecks(repo *git.Repo) ([]check, error) {
 		driftCheck(repo),
 		shellFunctionCheck(),
 	}
+	checks = append(checks, mergeListChecks()...)
 
 	// A row rather than a return, here and below: one unreadable file must not
 	// take every unrelated row of the report with it.
@@ -179,6 +181,29 @@ func worktreeHealthCheck(repo *git.Repo, mainCheckout string, linked []worktree.
 	}
 	row.detail = strings.Join(clauses, ", and ")
 	return row
+}
+
+// mergeListChecks read holt's own file rather than anything in this repository:
+// the files it names are merged wherever this machine rebases.
+func mergeListChecks() []check {
+	list, err := config.LoadMergeList()
+	if err != nil {
+		return []check{{statusFail, "merge list", err.Error()}}
+	}
+
+	var rows []check
+	// Said out loud, or a typo turns up as a rebase that put the branch back.
+	if bad := list.Rejected(); len(bad) > 0 {
+		rows = append(rows, check{statusWarn, "merge list",
+			fmt.Sprintf("%s (%s)", listSome(bad, itemsInMessage), list.Path())})
+	}
+
+	patterns := list.Patterns()
+	if len(patterns) == 0 {
+		return append(rows, check{statusOK, "merged paths",
+			fmt.Sprintf("nothing listed in %s, so every conflict of a rebase is yours", list.Path())})
+	}
+	return append(rows, check{statusOK, "merged paths", listSome(patterns, itemsInMessage)})
 }
 
 // shellFunctionCheck goes by the marker the snippet exports, the wrapper's only

@@ -20,7 +20,7 @@ func TestCurrentBranchNamesTheOperationTheWorktreeIsStoppedIn(t *testing.T) {
 	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
 	// The state "holt rebase --no-abort" leaves when it cannot finish, from a real
 	// conflict, since git detaches HEAD and a faked marker would not.
-	if err := Rebase(open(t, feature), false, io.Discard); !errors.Is(err, ErrRebaseStopped) {
+	if err := Rebase(open(t, feature), false, nil, io.Discard); !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("the fixture produced %v, want a stopped rebase", err)
 	}
 
@@ -42,7 +42,7 @@ func TestRebaseOntoFetchedDefault(t *testing.T) {
 	// The default branch moves on after the worktree was made.
 	upstream := testutil.CommitTo(t, origin, "upstream.txt", "someone else's work\n")
 
-	if err := Rebase(open(t, feature), true, io.Discard); err != nil {
+	if err := Rebase(open(t, feature), true, nil, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 
@@ -64,7 +64,7 @@ func TestRebaseStaleOriginHead(t *testing.T) {
 	testutil.Git(t, clone, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/initial-pr")
 	upstream := testutil.CommitTo(t, origin, "upstream.txt", "main has moved on\n")
 
-	if err := Rebase(open(t, feature), true, io.Discard); err != nil {
+	if err := Rebase(open(t, feature), true, nil, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 
@@ -77,7 +77,7 @@ func TestRebaseStaleOriginHead(t *testing.T) {
 func TestRebaseOnDefaultBranch(t *testing.T) {
 	clone, _ := testutil.NewClonedRepo(t)
 
-	err := Rebase(open(t, clone), true, io.Discard)
+	err := Rebase(open(t, clone), true, nil, io.Discard)
 
 	if err == nil {
 		t.Fatal("rebasing the default branch onto itself was allowed")
@@ -92,7 +92,7 @@ func TestRebaseRefusesUncommitted(t *testing.T) {
 	feature := branchWorktree(t, clone, "feature", "work.txt", "my work\n")
 	testutil.WriteFile(t, filepath.Join(feature, "work.txt"), "edited and not committed\n")
 
-	err := Rebase(open(t, feature), true, io.Discard)
+	err := Rebase(open(t, feature), true, nil, io.Discard)
 
 	if err == nil {
 		t.Fatal("a rebase was started over uncommitted changes")
@@ -109,7 +109,7 @@ func TestRebaseAllowsUntrackedFiles(t *testing.T) {
 	// A rebase does not touch untracked files.
 	testutil.WriteFile(t, filepath.Join(feature, "scratch.md"), "notes\n")
 
-	if err := Rebase(open(t, feature), true, io.Discard); err != nil {
+	if err := Rebase(open(t, feature), true, nil, io.Discard); err != nil {
 		t.Fatalf("an untracked file blocked the rebase: %v", err)
 	}
 }
@@ -122,7 +122,7 @@ func TestRebaseDuringBisect(t *testing.T) {
 	testutil.Git(t, feature, "bisect", "start")
 	testutil.Git(t, feature, "bisect", "bad")
 
-	err := Rebase(open(t, feature), true, io.Discard)
+	err := Rebase(open(t, feature), true, nil, io.Discard)
 
 	if err == nil {
 		t.Fatal("a rebase was started in a bisecting worktree")
@@ -142,11 +142,11 @@ func TestRebaseDuringRebase(t *testing.T) {
 	feature := branchWorktree(t, clone, "feature", "shared.txt", "the branch's version\n")
 	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
 	// A real conflict, because git detaches HEAD and a faked marker would not.
-	if err := Rebase(open(t, feature), false, io.Discard); !errors.Is(err, ErrRebaseStopped) {
+	if err := Rebase(open(t, feature), false, nil, io.Discard); !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("the fixture produced %v, want a stopped rebase", err)
 	}
 
-	err := Rebase(open(t, feature), true, io.Discard)
+	err := Rebase(open(t, feature), true, nil, io.Discard)
 
 	if err == nil {
 		t.Fatal("a second rebase was started on top of an unfinished one")
@@ -166,7 +166,7 @@ func TestRebaseDuringMerge(t *testing.T) {
 		t.Fatal("the fixture did not produce a conflicted merge")
 	}
 
-	err := Rebase(open(t, feature), true, io.Discard)
+	err := Rebase(open(t, feature), true, nil, io.Discard)
 
 	if err == nil || !strings.Contains(err.Error(), "unfinished merge") {
 		t.Fatalf("got %v, want the unfinished merge named", err)
@@ -184,7 +184,7 @@ func TestRebaseRefusedByHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Rebase(open(t, feature), true, io.Discard)
+	err := Rebase(open(t, feature), true, nil, io.Discard)
 
 	if err == nil {
 		t.Fatal("a refused rebase was reported as success")
@@ -225,7 +225,7 @@ func TestRebaseConflictAborts(t *testing.T) {
 	before := testutil.Git(t, feature, "rev-parse", "HEAD")
 	var progress bytes.Buffer
 
-	err := Rebase(open(t, feature), true, &progress)
+	err := Rebase(open(t, feature), true, nil, &progress)
 
 	if !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("got %v, want ErrRebaseStopped", err)
@@ -268,7 +268,7 @@ func TestRebaseConflictNamesFilesFromASubdirectory(t *testing.T) {
 
 	// Run from the subdirectory, which is what diff.relative measures against: it
 	// drops every conflict outside it, and the conflict here is above it.
-	err := Rebase(open(t, sub), true, &progress)
+	err := Rebase(open(t, sub), true, nil, &progress)
 
 	if !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("got %v, want ErrRebaseStopped", err)
@@ -283,7 +283,7 @@ func TestRebaseConflictKept(t *testing.T) {
 	feature := branchWorktree(t, clone, "feature", "shared.txt", "the branch's version\n")
 	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
 
-	err := Rebase(open(t, feature), false, io.Discard)
+	err := Rebase(open(t, feature), false, nil, io.Discard)
 
 	if !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("got %v, want ErrRebaseStopped", err)
@@ -305,7 +305,7 @@ func TestRebaseConflictAbortFails(t *testing.T) {
 	clone, origin := testutil.NewClonedRepo(t)
 	feature := branchWorktree(t, clone, "feature", "shared.txt", "the branch's version\n")
 	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
-	if err := Rebase(open(t, feature), false, io.Discard); !errors.Is(err, ErrRebaseStopped) {
+	if err := Rebase(open(t, feature), false, nil, io.Discard); !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("the fixture produced %v, want a stopped rebase", err)
 	}
 	// git restores a file by replacing it, which needs write permission on the
@@ -317,7 +317,8 @@ func TestRebaseConflictAbortFails(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(feature, 0o755) })
 
-	err := abortStoppedRebase(open(t, feature), io.Discard)
+	// The reason holt would carry in: the file it would not settle by itself.
+	err := abortStoppedRebase(open(t, feature), errors.New("shared.txt is not one of the files holt merges itself"), io.Discard)
 
 	if !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("got %v, want ErrRebaseStopped", err)
@@ -367,7 +368,7 @@ func TestRebaseOntoShadowedRemoteRef(t *testing.T) {
 	// onto it, warns among its progress and exits zero.
 	testutil.Git(t, worktree, "branch", "origin/main", "HEAD")
 
-	if err := Rebase(open(t, worktree), true, io.Discard); err != nil {
+	if err := Rebase(open(t, worktree), true, nil, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 
@@ -383,7 +384,7 @@ func TestListNamesBranchOfStoppedRebase(t *testing.T) {
 	testutil.CommitTo(t, worktree, "shared.txt", "the branch's version\n")
 	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
 
-	if err := Rebase(open(t, worktree), false, io.Discard); !errors.Is(err, ErrRebaseStopped) {
+	if err := Rebase(open(t, worktree), false, nil, io.Discard); !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("the fixture no longer stops the rebase: %v", err)
 	}
 
