@@ -4,7 +4,7 @@ class Holt < Formula
   desc "Git worktree helper that mirrors personal files into every worktree"
   homepage "https://github.com/MaxSiominDev/holt"
   url "https://github.com/MaxSiominDev/holt/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "9ea0b735a8d99b536245b9c155b7276370446e7caf3455be787df46c0b57d4f2"
   license "MIT"
   head "https://github.com/MaxSiominDev/holt.git", branch: "main"
 
