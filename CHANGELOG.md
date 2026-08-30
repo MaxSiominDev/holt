@@ -8,6 +8,10 @@ thing done before that version is tagged.
 
 ## [Unreleased]
 
+### Changed
+
+- `holt rebase` now aborts in case of conflict
+
 ## [0.1.0] - 2026-08-30
 
 ### Added

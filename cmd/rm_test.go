@@ -293,8 +293,8 @@ func TestRemoveRefusesWorktreeMidRebase(t *testing.T) {
 	testutil.CommitTo(t, feature, "shared.txt", "the branch's version\n")
 	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
 	t.Chdir(feature)
-	// holt's own doing: a rebase it stopped on a conflict.
-	_ = runHoltExpectingFailure(t, "rebase")
+	// holt's own doing: a rebase it stopped on a conflict and was told to leave.
+	_ = runHoltExpectingFailure(t, "rebase", "--no-abort")
 	t.Chdir(clone)
 
 	err := runHoltExpectingFailure(t, "rm", "feature")

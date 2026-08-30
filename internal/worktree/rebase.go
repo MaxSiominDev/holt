@@ -15,7 +15,7 @@ import (
 var ErrRebaseStopped = errors.New("the rebase stopped before it finished")
 
 // Rebase never pushes: force-pushing the rewritten history is the user's call.
-func Rebase(repo *git.Repo, progress io.Writer) error {
+func Rebase(repo *git.Repo, abortOnConflict bool, progress io.Writer) error {
 	// The offline guards come first, so a doomed rebase costs no round trip.
 	if err := checkWorktreeReady(repo); err != nil {
 		return err
@@ -36,16 +36,43 @@ func Rebase(repo *git.Repo, progress io.Writer) error {
 
 	// The full name of the remote-tracking ref: a tag or local branch called
 	// origin/main outranks it, and git would rebase onto that one and exit zero.
-	if err := repo.Run(progress, "rebase", "refs/remotes/origin/"+defaultBranch); err != nil {
+	args := []string{"rebase", "refs/remotes/origin/" + defaultBranch}
+	if abortOnConflict {
+		args = append([]string{"-c", "advice.mergeConflict=false"}, args...)
+	}
+	if err := repo.Run(progress, args...); err != nil {
 		// git also exits non-zero when it declines to start, a pre-rebase hook
 		// refusing for one, leaving no rebase to continue or abort.
 		if operation, checkErr := OperationInProgress(repo); checkErr != nil || operation != "rebase" {
 			return err
 		}
-		return fmt.Errorf("%w: resolve the conflict and run %q, or %q to put the branch back. holt does not touch a rebase in progress",
-			ErrRebaseStopped, "git rebase --continue", "git rebase --abort")
+		if !abortOnConflict {
+			return fmt.Errorf("%w: resolve the conflict and run %q, or %q to put the branch back. holt does not touch a rebase in progress",
+				ErrRebaseStopped, "git rebase --continue", "git rebase --abort")
+		}
+		return abortStoppedRebase(repo, progress)
 	}
 	return nil
+}
+
+// git's hints about resolving the conflict or aborting it by hand are already on
+// screen by now, so the message says outright that the abort has happened.
+func abortStoppedRebase(repo *git.Repo, progress io.Writer) error {
+	// Read while the conflict is still there, since the abort takes the unmerged
+	// entries with it. A listing that fails is dropped rather than kept from the
+	// abort, which is the part that was asked for. diff.relative, which the user
+	// may well have set, would cut the list down to the directory holt was run
+	// from and say nothing about the rest.
+	conflicted, _ := repo.Output("-c", "diff.relative=false", "--no-optional-locks", "diff", "--name-only", "--diff-filter=U")
+
+	if err := repo.Run(progress, "rebase", "--abort"); err != nil {
+		return fmt.Errorf("%w, and the abort failed as well, so the worktree is still in it: %w", ErrRebaseStopped, err)
+	}
+	if conflicted != "" {
+		fmt.Fprintf(progress, "holt: conflicts in %s\n", strings.ReplaceAll(conflicted, "\n", ", "))
+	}
+	return fmt.Errorf("%w: the branch is back where it was. Run %q to stop in the conflict and resolve it instead",
+		ErrRebaseStopped, "holt rebase --no-abort")
 }
 
 // Every state where a rebase would destroy something or stop halfway, as far as
