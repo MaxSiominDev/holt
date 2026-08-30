@@ -35,7 +35,7 @@ func TestPushDefaultsToNoForce(t *testing.T) {
 	runHolt(t, "push")
 	testutil.Git(t, clone, "commit", "--quiet", "--amend", "-m", "reworded")
 
-	runHoltExpectingFailure(t, "push")
+	_ = runHoltExpectingFailure(t, "push")
 }
 
 func TestPushForceShorthand(t *testing.T) {

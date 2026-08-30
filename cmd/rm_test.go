@@ -34,7 +34,7 @@ func TestRemoveRefusesFromSubdirectory(t *testing.T) {
 	}
 	t.Chdir(nested)
 
-	runHoltExpectingFailure(t, "rm", "feature")
+	_ = runHoltExpectingFailure(t, "rm", "feature")
 
 	if _, err := os.Stat(feature); err != nil {
 		t.Error("the worktree the shell was standing in was removed")
@@ -294,7 +294,7 @@ func TestRemoveRefusesWorktreeMidRebase(t *testing.T) {
 	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
 	t.Chdir(feature)
 	// holt's own doing: a rebase it stopped on a conflict.
-	runHoltExpectingFailure(t, "rebase")
+	_ = runHoltExpectingFailure(t, "rebase")
 	t.Chdir(clone)
 
 	err := runHoltExpectingFailure(t, "rm", "feature")

@@ -471,7 +471,7 @@ func TestMirrorRemoveRelinksThePathsThatStayEvenWhenAWorktreeFails(t *testing.T)
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(blocked, "d"), 0o755) })
 
 	// One worktree failing must not cost the rest their repair, as everywhere else.
-	runHoltExpectingFailure(t, "mirror", "rm", "d/a.local.md")
+	_ = runHoltExpectingFailure(t, "mirror", "rm", "d/a.local.md")
 
 	if _, err := os.Lstat(filepath.Join(reachable, "d", "a.local.md")); err != nil {
 		t.Errorf("the link the surviving pattern owns was not put back: %v", err)

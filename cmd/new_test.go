@@ -46,5 +46,5 @@ func TestNewReachesOriginByDefault(t *testing.T) {
 	t.Chdir(clone)
 
 	// Without --no-fetch the origin is reached, so the test above pins something down.
-	runHoltExpectingFailure(t, "new", "feature")
+	_ = runHoltExpectingFailure(t, "new", "feature")
 }

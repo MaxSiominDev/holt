@@ -7,7 +7,7 @@ into them.
 ## Install
 
 ```sh
-brew tap MaxSiominDev/tap
+brew tap MaxSiominDev/holt
 brew install holt
 holt shell-init zsh --install   # or bash
 ```
@@ -46,7 +46,7 @@ holt mirror add .claude/settings.local.json
 holt mirror add '.claude/skills/*-local'
 ```
 
-You can edit thise files anywhere - you edit the one file.
+You can edit those files anywhere - you edit the one file.
 
 ## Requirements
 
