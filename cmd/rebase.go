@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"fmt"
+
+	"github.com/MaxSiominDev/holt/internal/config"
 	"github.com/MaxSiominDev/holt/internal/worktree"
 	"github.com/spf13/cobra"
 )
@@ -17,6 +20,9 @@ func newRebaseCommand() *cobra.Command {
 			"On a conflict it undoes the rebase, names the files that disagreed and\n" +
 			"leaves the branch where it was. --no-abort stops where git stopped instead,\n" +
 			"for resolving by hand.\n\n" +
+			"A conflict in a markdown file named in ~/.config/holt/merge.list is settled\n" +
+			"here instead, and only where both sides did nothing but add lines, this\n" +
+			"branch's own coming first.\n\n" +
 			"It never pushes: force-pushing rewritten history is yours to decide.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -24,7 +30,16 @@ func newRebaseCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return worktree.Rebase(repo, !noAbort, cmd.ErrOrStderr())
+			list, err := config.LoadMergeList()
+			if err != nil {
+				return err
+			}
+			// A line holt cannot read is a file it will not settle, and the rebase
+			// that then puts the branch back would be the only news of the typo.
+			for _, rejected := range list.Rejected() {
+				fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s\n", list.Path(), rejected)
+			}
+			return worktree.Rebase(repo, !noAbort, list, cmd.ErrOrStderr())
 		},
 	}
 	command.Flags().BoolVar(&noAbort, "no-abort", false,

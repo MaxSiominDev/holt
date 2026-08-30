@@ -8,6 +8,11 @@ thing done before that version is tagged.
 
 ## [Unreleased]
 
+### Added
+
+- `~/.config/holt/merge.list`: the markdown files `holt rebase` merges itself when there is a
+  conflict in them
+
 ### Changed
 
 - `holt rebase` now aborts in case of conflict

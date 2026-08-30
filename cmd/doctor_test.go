@@ -25,8 +25,8 @@ func TestDoctorHealthyRepository(t *testing.T) {
 	// Row by row: the words alone turn up in details and in repository paths.
 	for _, label := range []string{
 		"main checkout", "worktrees", "default branch", "ahead/behind columns",
-		"shell function", "hook directory", "post-checkout hook", "mirrored paths",
-		"info/exclude", "symlinks",
+		"shell function", "hook directory", "post-checkout hook", "merged paths",
+		"mirrored paths", "info/exclude", "symlinks",
 	} {
 		wantCheck(t, out, label, statusOK, "")
 	}
@@ -670,6 +670,18 @@ func TestShellFromEnv(t *testing.T) {
 }
 
 // A fragment rather than the whole line, so rewording a message does not fail.
+func TestDoctorMergeList(t *testing.T) {
+	main := testutil.NewRepo(t)
+	writeMergeList(t, "CHANGELOG.md\ndocs/*.md\nnotes.txt\n")
+	t.Chdir(main)
+
+	out, _ := runHolt(t, "doctor")
+
+	wantCheck(t, out, "merged paths", statusOK, "CHANGELOG.md, docs/*.md")
+	// The rejected line names itself and the file to fix it in.
+	wantCheck(t, out, "merge list", statusWarn, "line 3")
+}
+
 func wantCheck(t *testing.T, out, label string, status checkStatus, fragment string) {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {

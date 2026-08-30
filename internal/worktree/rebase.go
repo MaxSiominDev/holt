@@ -9,13 +9,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/MaxSiominDev/holt/internal/config"
 	"github.com/MaxSiominDev/holt/internal/git"
 )
 
 var ErrRebaseStopped = errors.New("the rebase stopped before it finished")
 
 // Rebase never pushes: force-pushing the rewritten history is the user's call.
-func Rebase(repo *git.Repo, abortOnConflict bool, progress io.Writer) error {
+// The merge list names the files holt settles itself; without one every conflict
+// is the user's.
+func Rebase(repo *git.Repo, abortOnConflict bool, merge *config.MergeList, progress io.Writer) error {
 	// The offline guards come first, so a doomed rebase costs no round trip.
 	if err := checkWorktreeReady(repo); err != nil {
 		return err
@@ -46,18 +49,50 @@ func Rebase(repo *git.Repo, abortOnConflict bool, progress io.Writer) error {
 		if operation, checkErr := OperationInProgress(repo); checkErr != nil || operation != "rebase" {
 			return err
 		}
-		if !abortOnConflict {
-			return fmt.Errorf("%w: resolve the conflict and run %q, or %q to put the branch back. holt does not touch a rebase in progress",
-				ErrRebaseStopped, "git rebase --continue", "git rebase --abort")
-		}
-		return abortStoppedRebase(repo, progress)
+		return finishStoppedRebase(repo, abortOnConflict, merge, progress)
 	}
 	return nil
 }
 
+// finishStoppedRebase carries the rebase as far as holt can: the files the merge
+// list names are settled here and the rebase goes on, once per commit it stops
+// at. The first conflict holt will not touch ends it. Only the rebase holt
+// started in this run is ever continued, since one already in progress fails a
+// precondition above.
+func finishStoppedRebase(repo *git.Repo, abortOnConflict bool, merge *config.MergeList, progress io.Writer) error {
+	for {
+		merged, refused := autoMerge(repo, merge)
+		if len(merged) > 0 {
+			fmt.Fprintf(progress, "holt: merged %s\n", strings.Join(merged, ", "))
+		}
+		if refused == nil && len(merged) == 0 {
+			// A stop that is not a conflict at all: a commit gone empty, or a
+			// worktree git will not overwrite.
+			refused = errors.New("the rebase stopped with nothing for holt to merge")
+		}
+		if refused != nil {
+			if !abortOnConflict {
+				return fmt.Errorf("%w: %w. Resolve it and run %q, or %q to put the branch back",
+					ErrRebaseStopped, refused, "git rebase --continue", "git rebase --abort")
+			}
+			return abortStoppedRebase(repo, refused, progress)
+		}
+
+		// git opens an editor on the message of the commit it just finished.
+		err := repo.RunWithoutEditor(progress, "rebase", "--continue")
+		if err == nil {
+			return nil
+		}
+		// A rebase stops once per commit, so the next commit's conflict lands here.
+		if operation, checkErr := OperationInProgress(repo); checkErr != nil || operation != "rebase" {
+			return err
+		}
+	}
+}
+
 // git's hints about resolving the conflict or aborting it by hand are already on
 // screen by now, so the message says outright that the abort has happened.
-func abortStoppedRebase(repo *git.Repo, progress io.Writer) error {
+func abortStoppedRebase(repo *git.Repo, reason error, progress io.Writer) error {
 	// Read while the conflict is still there, since the abort takes the unmerged
 	// entries with it. A listing that fails is dropped rather than kept from the
 	// abort, which is the part that was asked for. diff.relative, which the user
@@ -71,8 +106,8 @@ func abortStoppedRebase(repo *git.Repo, progress io.Writer) error {
 	if conflicted != "" {
 		fmt.Fprintf(progress, "holt: conflicts in %s\n", strings.ReplaceAll(conflicted, "\n", ", "))
 	}
-	return fmt.Errorf("%w: the branch is back where it was. Run %q to stop in the conflict and resolve it instead",
-		ErrRebaseStopped, "holt rebase --no-abort")
+	return fmt.Errorf("%w: %w. The branch is back where it was. Run %q to stop in the conflict and resolve it instead",
+		ErrRebaseStopped, reason, "holt rebase --no-abort")
 }
 
 // Every state where a rebase would destroy something or stop halfway, as far as

@@ -122,21 +122,44 @@ func wait(cmd *exec.Cmd, args []string, stderr *bytes.Buffer) error {
 }
 
 func (r *Repo) Output(args ...string) (string, error) {
+	out, err := r.OutputRaw(args...)
+	if err != nil {
+		return "", err
+	}
+	// Not TrimSpace, which would eat a trailing space belonging to a path.
+	return strings.TrimRight(string(out), "\r\n"), nil
+}
+
+// OutputRaw hands back what git wrote byte for byte, for the contents of a file,
+// whose own trailing newline Output would take for git's.
+func (r *Repo) OutputRaw(args ...string) ([]byte, error) {
 	cmd := r.command(args)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	if err := wait(cmd, args, &stderr); err != nil {
-		return "", err
+		return nil, err
 	}
-	// Not TrimSpace, which would eat a trailing space belonging to a path.
-	return strings.TrimRight(stdout.String(), "\r\n"), nil
+	return stdout.Bytes(), nil
 }
 
 // Run sends both streams to progress, keeping holt's stdout free for the path.
 func (r *Repo) Run(progress io.Writer, args ...string) error {
+	return r.run(progress, nil, args)
+}
+
+// RunWithoutEditor is Run for a command git would open an editor for, which holt
+// is not there to type into. It takes an environment variable rather than the
+// core.editor setting, since GIT_EDITOR outranks that and users do set it.
+func (r *Repo) RunWithoutEditor(progress io.Writer, args ...string) error {
+	return r.run(progress, []string{"GIT_EDITOR=true"}, args)
+}
+
+func (r *Repo) run(progress io.Writer, environment []string, args []string) error {
 	cmd := r.command(args)
+	// The last value of a duplicated key wins, as it does in command.
+	cmd.Env = append(cmd.Env, environment...)
 	cmd.Stdout = progress
 	cmd.Stderr = progress
 	return wait(cmd, args, nil)
