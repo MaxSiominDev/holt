@@ -61,6 +61,8 @@ func (l *MergeList) Rejected() []string {
 // Matches takes a path as git reports it: relative to the repository root, with
 // forward slashes on every platform.
 func (l *MergeList) Matches(file string) bool {
+	// Rebase takes a nil list to mean holt settles nothing of its own, so there is
+	// nothing here to match against either.
 	if l == nil {
 		return false
 	}

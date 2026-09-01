@@ -30,6 +30,9 @@ func TestDoctorHealthyRepository(t *testing.T) {
 	} {
 		wantCheck(t, out, label, statusOK, "")
 	}
+	// The row a repository gets until the merge list names something, which is
+	// every repository to begin with.
+	wantCheck(t, out, "merged paths", statusOK, "nothing listed")
 }
 
 func TestDoctorBareMainCheckout(t *testing.T) {
@@ -669,7 +672,6 @@ func TestShellFromEnv(t *testing.T) {
 	}
 }
 
-// A fragment rather than the whole line, so rewording a message does not fail.
 func TestDoctorMergeList(t *testing.T) {
 	main := testutil.NewRepo(t)
 	writeMergeList(t, "CHANGELOG.md\ndocs/*.md\nnotes.txt\n")
@@ -682,6 +684,7 @@ func TestDoctorMergeList(t *testing.T) {
 	wantCheck(t, out, "merge list", statusWarn, "line 3")
 }
 
+// A fragment rather than the whole line, so rewording a message does not fail.
 func wantCheck(t *testing.T, out, label string, status checkStatus, fragment string) {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {

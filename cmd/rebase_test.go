@@ -111,5 +111,8 @@ func TestRebaseReportsAnUnreadableMergeListLine(t *testing.T) {
 
 func writeMergeList(t *testing.T, content string) {
 	t.Helper()
+	if os.Getenv("XDG_CONFIG_HOME") == "" {
+		t.Fatal("no XDG_CONFIG_HOME, so this would write holt's configuration into the working directory")
+	}
 	testutil.WriteFile(t, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "holt", "merge.list"), content)
 }
