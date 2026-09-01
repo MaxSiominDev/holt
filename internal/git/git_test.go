@@ -2,6 +2,7 @@ package git_test
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,6 +261,40 @@ func TestOutputIgnoresInheritedIndexFile(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("git ran against the caller's index: %v", err)
+	}
+}
+
+func TestOutputRawKeepsTheTrailingNewline(t *testing.T) {
+	dir := testutil.NewRepo(t)
+	repo := open(t, dir)
+	// The last newline of a file is the file's own, and Output takes it for git's.
+	testutil.WriteFile(t, filepath.Join(dir, "notes.md"), "one\ntwo\n")
+	testutil.Git(t, dir, "add", "notes.md")
+
+	got, err := repo.OutputRaw("cat-file", "blob", ":notes.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "one\ntwo\n"; string(got) != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestRunWithoutEditorOutranksTheOneInTheEnvironment(t *testing.T) {
+	dir := testutil.NewRepo(t)
+	repo := open(t, dir)
+	// GIT_EDITOR outranks the core.editor setting, so a command holt runs on the
+	// user's behalf would otherwise drop them into whatever they have set.
+	t.Setenv("GIT_EDITOR", "false")
+
+	if err := repo.RunWithoutEditor(io.Discard, "commit", "--amend"); err != nil {
+		t.Fatal(err)
+	}
+
+	// An editor that leaves the file alone keeps the message it was given.
+	if got := testutil.Git(t, dir, "log", "-1", "--format=%s"); got != "initial" {
+		t.Fatalf("got %q, want the message the commit already had", got)
 	}
 }
 

@@ -36,6 +36,20 @@ func TestMergeListReadsPatterns(t *testing.T) {
 	}
 }
 
+func TestMergeListCleansPatterns(t *testing.T) {
+	list := write(t, "./CHANGELOG.md\ndocs/../../outside.md\n")
+
+	// git names a file in the root CHANGELOG.md, so a pattern written the other
+	// way round would match nothing and say nothing.
+	if got := list.Patterns(); !slices.Equal(got, []string{"CHANGELOG.md"}) {
+		t.Errorf("got %v, want the leading ./ taken off", got)
+	}
+	// And a path that only reaches outside once it is cleaned still reaches outside.
+	if rejected := list.Rejected(); len(rejected) != 1 || !strings.Contains(rejected[0], "outside") {
+		t.Errorf("got %v, want the second line turned away", rejected)
+	}
+}
+
 func TestMergeListMatchesAsGitNamesFiles(t *testing.T) {
 	list := write(t, "CHANGELOG.md\ndocs/*.md\n")
 
@@ -54,7 +68,7 @@ func TestMergeListMatchesAsGitNamesFiles(t *testing.T) {
 }
 
 func TestMergeListRejectsWhatItCannotUse(t *testing.T) {
-	list := write(t, "CHANGELOG.md\nnotes.txt\n/etc/passwd\n../outside.md\ndocs/**/*.md\nbad[.md\n")
+	list := write(t, "CHANGELOG.md\nnotes.txt\n/etc/notes.md\n../outside.md\ndocs/**/*.md\nbad[.md\n")
 
 	// The readable line survives its neighbours: a hand written file is not thrown
 	// out whole over one bad line.
@@ -76,10 +90,13 @@ func TestMergeListRejectsWhatItCannotUse(t *testing.T) {
 }
 
 func TestMergeListIgnoresAByteOrderMark(t *testing.T) {
-	list := write(t, "\ufeff# holt's own file\nCHANGELOG.md\n")
+	list := write(t, "\ufeffCHANGELOG.md\n")
 
 	if got := list.Patterns(); !slices.Equal(got, []string{"CHANGELOG.md"}) {
-		t.Errorf("got %v, want the mark taken off the comment it hides in", got)
+		t.Errorf("got %v, want the mark taken off the pattern it hides in", got)
+	}
+	if rejected := list.Rejected(); len(rejected) > 0 {
+		t.Errorf("got %v, want the line read rather than turned away", rejected)
 	}
 }
 

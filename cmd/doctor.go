@@ -40,8 +40,8 @@ func newDoctorCommand() *cobra.Command {
 		Short:   "Check what is set up here and what is not",
 		GroupID: groupSetup,
 		Long: "Goes through this repository: the worktrees, the default branch, the\n" +
-			"shell function, the post-checkout hook, the mirror list and the symlinks\n" +
-			"it should have made. Nothing is changed.\n\n" +
+			"shell function, the merge list, the post-checkout hook, the mirror list\n" +
+			"and the symlinks it should have made. Nothing is changed.\n\n" +
 			"Most trouble is reported as a warning and still exits zero. A failure means\n" +
 			"holt cannot do its job here at all: a file or a worktree it cannot read, or\n" +
 			"a hook directory inside the working tree, where it will not write.",
@@ -183,7 +183,7 @@ func worktreeHealthCheck(repo *git.Repo, mainCheckout string, linked []worktree.
 	return row
 }
 
-// mergeListChecks read holt's own file rather than anything in this repository:
+// mergeListChecks reads holt's own file rather than anything in this repository:
 // the files it names are merged wherever this machine rebases.
 func mergeListChecks() []check {
 	list, err := config.LoadMergeList()

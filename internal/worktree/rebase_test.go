@@ -283,13 +283,23 @@ func TestRebaseConflictKept(t *testing.T) {
 	feature := branchWorktree(t, clone, "feature", "shared.txt", "the branch's version\n")
 	testutil.CommitTo(t, origin, "shared.txt", "the default branch's version\n")
 
-	err := Rebase(open(t, feature), false, nil, io.Discard)
+	var progress bytes.Buffer
+	err := Rebase(open(t, feature), false, nil, &progress)
 
 	if !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("got %v, want ErrRebaseStopped", err)
 	}
 	if !strings.Contains(err.Error(), "git rebase --abort") {
 		t.Errorf("error %q does not say how to get out of it", err)
+	}
+	// This path announces what holt settled, and it settled nothing here.
+	if strings.Contains(progress.String(), "holt: merged") {
+		t.Errorf("output %q claims a merge over an empty list of them", &progress)
+	}
+	// And git's advice is kept, since the conflict it names really is the user's
+	// to finish from here.
+	if !strings.Contains(progress.String(), "git rebase --skip") {
+		t.Errorf("output %q is missing git's advice, which is still true under --no-abort", &progress)
 	}
 	// What --no-abort is for: the conflict is the user's to resolve, so holt must
 	// not clean up after git.
@@ -317,8 +327,10 @@ func TestRebaseConflictAbortFails(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(feature, 0o755) })
 
+	var progress bytes.Buffer
 	// The reason holt would carry in: the file it would not settle by itself.
-	err := abortStoppedRebase(open(t, feature), errors.New("shared.txt is not one of the files holt merges itself"), io.Discard)
+	err := abortStoppedRebase(open(t, feature), errors.New("shared.txt is not one of the files holt merges itself"),
+		[]string{"CHANGELOG.md"}, &progress)
 
 	if !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("got %v, want ErrRebaseStopped", err)
@@ -328,8 +340,23 @@ func TestRebaseConflictAbortFails(t *testing.T) {
 	if !strings.Contains(err.Error(), "still in it") {
 		t.Errorf("error %q does not say the rebase is still there", err)
 	}
+	// The user is left standing in the conflict, so the reason holt stopped is
+	// the one thing that says what to do about it.
+	if !strings.Contains(err.Error(), "shared.txt") {
+		t.Errorf("error %q does not say what holt would not settle", err)
+	}
 	if operation, _ := OperationInProgress(open(t, feature)); operation != "rebase" {
 		t.Errorf("got operation %q, want the rebase git could not undo", operation)
+	}
+	// Said before the abort is attempted, or a failed abort leaves the user in a
+	// conflict holt named nothing of.
+	if !strings.Contains(progress.String(), "holt: conflicts in shared.txt") {
+		t.Errorf("output %q does not name the file left conflicting", &progress)
+	}
+	// The abort did not happen, so what holt merged is still in the worktree and
+	// is the user's to keep or undo along with the rest.
+	if !strings.Contains(progress.String(), "holt: merged CHANGELOG.md") {
+		t.Errorf("output %q leaves holt's own merge unmentioned in a rebase that is still standing", &progress)
 	}
 }
 
