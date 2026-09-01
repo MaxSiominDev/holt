@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -85,6 +86,12 @@ func mergeAdditions(root *git.Repo, top string, file conflictedFile, list *confi
 	if !list.Matches(file.path) {
 		return fmt.Errorf("%s is not one of the files holt merges itself", file.path)
 	}
+	// git refuses to hold such a path in an index of its own making, verified for
+	// "../", "a/../../", a leading slash and a leading .git. It is checked anyway
+	// because the next thing holt does with the name is write to it.
+	if reachesOutside(file.path) {
+		return fmt.Errorf("%s is not a path inside the repository, and holt writes nowhere else", file.path)
+	}
 	if file.ancestor.object == "" || file.upstream.object == "" || file.mine.object == "" {
 		return fmt.Errorf("%s is missing from one of the three versions being merged, so a side added or deleted the file rather than lines in it", file.path)
 	}
@@ -147,6 +154,24 @@ func mergeAdditions(root *git.Repo, top string, file conflictedFile, list *confi
 	// stage its namesakes along with it, a refused one among them.
 	_, err = root.Output("add", "--", ":(literal)"+file.path)
 	return err
+}
+
+// git names a path with slashes, and a backslash is an ordinary character in a
+// name everywhere but Windows, where it is a separator too. A file called
+// "..\escape.md" is one legal name on Linux and a way out of the repository once
+// Windows joins it, so both are read as separators here whatever holt runs on.
+func reachesOutside(file string) bool {
+	cleaned := path.Clean(strings.ReplaceAll(file, `\`, "/"))
+	if strings.HasPrefix(cleaned, "/") || filepath.IsAbs(filepath.FromSlash(cleaned)) {
+		return true
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return true
+	}
+	// A worktree's .git is git's own, and in a linked worktree it is a file
+	// naming somewhere else entirely.
+	first, _, _ := strings.Cut(cleaned, "/")
+	return strings.EqualFold(first, ".git")
 }
 
 func unmergedFiles(root *git.Repo) ([]conflictedFile, error) {

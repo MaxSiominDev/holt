@@ -68,9 +68,11 @@ func finishStoppedRebase(repo *git.Repo, abortOnConflict bool, merge *config.Mer
 			}
 		}
 		if refused == nil && len(merged) == 0 {
-			// A stop that is not a conflict at all: a commit gone empty, or one
-			// git stopped for a reason of its own.
-			refused = errors.New("git left nothing here for holt to merge")
+			// Nothing unmerged means git stopped for something else: a commit that
+			// came out empty, or a state a hand resolution left it in. holt has no
+			// diagnosis of its own to add, so it sends the reader to git's, without
+			// saying where it went: the caller owns that stream.
+			refused = errors.New("nothing was left unmerged, so what stopped git was not a conflict at all, and git's own message says what it was")
 		}
 		if refused != nil {
 			// An abort takes back every commit of this rebase, the ones holt
