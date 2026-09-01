@@ -305,7 +305,7 @@ func TestFinishStoppedRebaseWithNothingUnmerged(t *testing.T) {
 	if !errors.Is(err, ErrRebaseStopped) {
 		t.Fatalf("got %v, want ErrRebaseStopped", err)
 	}
-	if !strings.Contains(err.Error(), "nothing here for holt to merge") {
+	if !strings.Contains(err.Error(), "nothing was left unmerged") {
 		t.Errorf("error %q does not say why holt stopped", err)
 	}
 	if head := testutil.Git(t, feature, "rev-parse", "HEAD"); head != before {
@@ -613,5 +613,37 @@ func TestRebaseMergesAFileInASubdirectory(t *testing.T) {
 	want := "- was there\n- mine\n- theirs\n"
 	if got := readFile(t, feature, filepath.Join("docs", "notes.md")); got != want {
 		t.Errorf("the merged file is\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestReachesOutside(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"a file in the root", "CHANGELOG.md", false},
+		{"a file in a directory", "docs/notes.md", false},
+		{"a path that cleans back inside", "docs/../notes.md", false},
+		{"a name that begins with two dots", "..notes.md", false},
+		{"a directory that begins with .git", ".github/workflows/ci.yml", false},
+		{"the parent itself", "..", true},
+		{"a path through the parent", "../escape.md", true},
+		{"a path back out of a directory", "docs/../../escape.md", true},
+		{"an absolute path", "/etc/notes.md", true},
+		{"git's own directory", ".git/hooks/post-checkout", true},
+		{"git's own directory in another case", ".GIT/config", true},
+		// Legal names on Linux, and separators once Windows joins them.
+		{"a traversal written with backslashes", `..\escape.md`, true},
+		{"a traversal out of a directory with backslashes", `docs\..\..\escape.md`, true},
+		{"git's own directory with backslashes", `.git\hooks\post-checkout`, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := reachesOutside(test.path); got != test.want {
+				t.Errorf("got %v, want %v", got, test.want)
+			}
+		})
 	}
 }
