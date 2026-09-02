@@ -146,6 +146,22 @@ func abortStoppedRebase(repo *git.Repo, reason error, merged []string, progress 
 func checkWorktreeReady(repo *git.Repo) error {
 	// git detaches HEAD during a rebase, so asking for the branch first would fail
 	// with "HEAD is not a symbolic ref" and hide this.
+	if err := checkNothingInProgress(repo); err != nil {
+		return err
+	}
+
+	// Untracked files are left out: a rebase does not touch them.
+	dirty, err := repo.Output("--no-optional-locks", "status", "--porcelain", "--untracked-files=no")
+	if err != nil {
+		return err
+	}
+	if dirty != "" {
+		return errors.New("this worktree has uncommitted changes, commit or stash them first")
+	}
+	return nil
+}
+
+func checkNothingInProgress(repo *git.Repo) error {
 	operation, err := OperationInProgress(repo)
 	if err != nil {
 		return err
@@ -156,15 +172,6 @@ func checkWorktreeReady(repo *git.Repo) error {
 	if operation != "" {
 		// "an unfinished %s" keeps the article right for "am" too.
 		return fmt.Errorf("this worktree has an unfinished %s, finish or abort it first", operation)
-	}
-
-	// Untracked files are left out: a rebase does not touch them.
-	dirty, err := repo.Output("--no-optional-locks", "status", "--porcelain", "--untracked-files=no")
-	if err != nil {
-		return err
-	}
-	if dirty != "" {
-		return errors.New("this worktree has uncommitted changes, commit or stash them first")
 	}
 	return nil
 }

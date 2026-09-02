@@ -55,7 +55,7 @@ func TestHelpContents(t *testing.T) {
 	// rendered row, since these names also appear in the prose above.
 	for _, name := range []string{
 		"cd", "doctor", "home", "ls", "main", "mirror", "new",
-		"open", "pull", "push", "rebase", "rm", "shell-init", "status",
+		"open", "pull", "push", "rebase", "rm", "shell-init", "status", "uncommit",
 	} {
 		if !strings.Contains(help, "\n  "+name+" ") {
 			t.Errorf("the help does not list %q:\n%s", name, help)

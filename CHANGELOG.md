@@ -12,6 +12,7 @@ thing done before that version is tagged.
 
 - `~/.config/holt/merge.list`: the markdown files `holt rebase` merges itself when there is a
   conflict in them
+- `holt uncommit`: `git reset --soft HEAD~1`
 
 ### Changed
 
