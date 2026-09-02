@@ -72,6 +72,7 @@ func newRootCommand(version string) *cobra.Command {
 		newListCommand(),
 		newRemoveCommand(),
 		newRebaseCommand(),
+		newUncommitCommand(),
 		newStatusCommand(),
 		newPullCommand(),
 		newPushCommand(),
