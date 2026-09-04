@@ -8,6 +8,8 @@ thing done before that version is tagged.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-04
+
 ### Added
 
 - `~/.config/holt/merge.list`: the markdown files `holt rebase` merges itself when there is a
@@ -34,5 +36,6 @@ thing done before that version is tagged.
 - `holt shell-init`: the function `holt cd` and `holt new` need, written into `~/.zshrc` or
   `~/.bashrc` on request.
 
-[Unreleased]: https://github.com/MaxSiominDev/holt/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MaxSiominDev/holt/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/MaxSiominDev/holt/releases/tag/v0.1.1
 [0.1.0]: https://github.com/MaxSiominDev/holt/releases/tag/v0.1.0
